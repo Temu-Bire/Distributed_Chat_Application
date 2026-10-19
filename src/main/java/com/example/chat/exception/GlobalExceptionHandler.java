@@ -90,6 +90,17 @@ public class GlobalExceptionHandler {
         return ResponseEntity.badRequest().body(ErrorResponse.of(ex.code(), ex.getMessage()));
     }
 
+    /** REST Bean Validation exception handler. */
+    @ExceptionHandler(org.springframework.web.bind.MethodArgumentNotValidException.class)
+    public ResponseEntity<ErrorResponse> handleRestValidationException(org.springframework.web.bind.MethodArgumentNotValidException ex) {
+        FieldError error = ex.getBindingResult().getFieldErrors().stream()
+                .filter(candidate -> candidate.getDefaultMessage() != null)
+                .findFirst()
+                .orElse(null);
+        String message = error == null ? "Validation failed." : error.getDefaultMessage();
+        return ResponseEntity.badRequest().body(ErrorResponse.of("VALIDATION_ERROR", message));
+    }
+
     private void reply(SimpMessageHeaderAccessor headers, ErrorResponse error) {
         // The principal is assigned by the handshake handler, so it is present
         // even before the connection has joined — the client still learns why

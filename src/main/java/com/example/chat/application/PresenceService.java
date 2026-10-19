@@ -70,6 +70,11 @@ public class PresenceService {
         return store.findByUsername(username);
     }
 
+    /** Returns true if the user with the given username is currently online. */
+    public boolean isOnline(String username) {
+        return findByUsername(username).isPresent();
+    }
+
     /** Display names of everyone currently connected, sorted. */
     public List<String> onlineUsernames() {
         return store.findAll().stream().map(ChatUser::username).toList();
