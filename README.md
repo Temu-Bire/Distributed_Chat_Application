@@ -113,51 +113,54 @@ Run a single test class:
 
 ## Try it with two browsers
 
-This is the manual check that matters, because it exercises the real page in a
-real browser rather than the test harness.
+This exercises the real application in modern browsers.
 
 1. **Start the server**
    ```powershell
    .\mvnw.cmd -B spring-boot:run
    ```
-   Wait for `Started ChatApplication`.
+   Wait for `Started ChatApplication` (served on port `8080`, or configure `--server.port=8090`).
 
-2. **First client** — open <http://localhost:8080>.
-   - The chip at the top right should read `server: UP – 0 online`.
-   - Enter a name (for example `alice`) and click **Connect**.
-   - The status chip turns green/`Connected`, the header shows
-     `Signed in as alice`, and the sidebar's `Online` count reads `1` with
-     `alice` listed beneath it.
+2. **First client** — open <http://localhost:8080> (or 8090).
+   - You will see the **Welcome to ChatApp** join screen with dynamic avatar preview.
+   - Enter a name (for example `alice`) and click **Connect to Chat**.
+   - The status chip in the top right shows green `● Connected`, the sidebar profile displays `alice` with avatar initial `A`, and the header shows `Public Chat · 1 online`.
+   - Toggle between **Light** and **Dark** themes anytime using the sun/moon button in the header.
 
-3. **Second client** — open a **new window or a private/incognito tab** at
-   <http://localhost:8080> and join as `bob`.
-   - Both windows now show **Online 2**.
-   - Both histories show a system line `bob joined the chat`.
+3. **Second client** — open a **new window or incognito tab** and join as `bob`.
+   - Both windows immediately update the user count: `Online Users (2)`.
+   - A centered system badge appears: `bob joined the chat` with a subtle timestamp below.
+   - A non-intrusive toast notification alerts online users.
 
-4. **Public message** — in the `alice` window type `hello from alice` and press
-   `Enter` (or click **Send**).
-   - Both windows show it, with the sender name and a timestamp.
-   - In alice's own window it is highlighted as her own message.
+4. **Public message** — in the `alice` window, type `Hello everyone!` and press `Enter` (or click the send button).
+   - In Alice's window, the message is aligned to the right in a blue bubble with timestamp `✓✓` and her avatar on the right.
+   - In Bob's window, the message appears on the left with Alice's purple avatar, username, timestamp, and message bubble.
+   - Bob can reply with `Hi Alice!`.
 
-5. **Private message** — in the `bob` window, pick `alice` in the
-   **recipient** dropdown (the placeholder changes to `Private message to
-   alice…`), type `only for alice`, and send.
-   - Bob's history shows it tagged `private` as `you → alice`.
-   - Alice's history shows it tagged `private` as `from bob`.
-   - **Open a third tab** as a third name first, if you want to confirm the
-     isolation: that third client must not see the message at all.
+5. **Direct messaging / Private Chat** — in the `bob` window:
+   - Click on `alice` in the **Online Users** list (or use the search box to find her).
+   - The conversation switches to `@alice`: the header updates to `@alice · Direct message · Online` and the composer placeholder changes to `Message @alice…`.
+   - Send `This is a private message`.
+   - Bob's view shows the private message, and Alice's view shows the direct message with `DIRECT` badge.
+   - If Alice is currently viewing Public Chat, she receives an unread badge on Bob in the sidebar and a toast notification.
+   - Clicking **Public Chat** in the sidebar returns immediately to the group channel.
 
-6. **Duplicate name** — in a fourth tab try to join as `alice` (any letter
-   case).
-   - The join screen stays, and an error explains the name is already in use.
+6. **Search & filter online users**:
+   - Type in the `Search users…` box in the sidebar to filter online users in real-time.
+   - Click the `✕` button to clear the filter.
 
-7. **Disconnect** — close one window.
-   - The other window immediately shows `alice left the chat` and the user
-     count drops.
+7. **Character counter & validation**:
+   - As you type in the composer, a character counter (`0/2000`) tracks length.
+   - Exceeding 2000 characters displays a red warning and disables the send button.
 
-8. **Reconnection** — with `F5` on a client that was in the chat, it returns to
-   the join screen (state is not restored); rejoining with the same name works
-   as soon as the previous connection has been cleaned up.
+8. **Duplicate name rejection**:
+   - In a third window, attempt to join as `alice` (case-insensitive).
+   - The connection is rejected by the server and an error alert is displayed.
+
+9. **Disconnect & Reconnect**:
+   - Close a window: the other window immediately shows `<name> left the chat` and updates the online user list.
+   - Use the **Settings** menu at the bottom-left to leave or reconnect on demand.
+
 
 ---
 
