@@ -281,9 +281,24 @@ class ChatWebSocketIntegrationTest {
 
         client.send(JOIN, new JoinRequest("u".repeat(21)));
 
+        // The DTO layer caught this, but the client still learns it was the
+        // username that was wrong, not the message body.
         ErrorResponse error = await(client, ERROR_QUEUE, ErrorResponse.class,
-                response -> response.code().startsWith("INVALID"));
+                response -> "INVALID_USERNAME".equals(response.code()));
         assertThat(error.message()).contains("20");
+    }
+
+    @Test
+    @DisplayName("a blank private recipient is reported as a missing recipient")
+    void blankRecipientIsReportedAsMissingRecipient() throws Exception {
+        String alice = uniqueName("alice");
+        StompTestClient aliceClient = joinAs(alice);
+
+        aliceClient.send(SEND_PRIVATE, new PrivateMessageRequest("   ", "hello"));
+
+        ErrorResponse error = await(aliceClient, ERROR_QUEUE, ErrorResponse.class,
+                response -> "RECIPIENT_NOT_FOUND".equals(response.code()));
+        assertThat(error.message()).isNotBlank();
     }
 
     @Test

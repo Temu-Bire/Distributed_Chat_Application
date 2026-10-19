@@ -13,7 +13,6 @@ import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 
 import java.security.Principal;
-import java.util.Objects;
 
 /**
  * One consistent failure path for every failure the client can trigger.
@@ -50,12 +49,29 @@ public class GlobalExceptionHandler {
     /** Bean Validation rejected the payload before the service saw it. */
     @MessageExceptionHandler(MethodArgumentNotValidException.class)
     public void handleInvalidPayload(MethodArgumentNotValidException ex, SimpMessageHeaderAccessor headers) {
-        String message = ex.getBindingResult().getFieldErrors().stream()
-                .map(FieldError::getDefaultMessage)
-                .filter(Objects::nonNull)
+        FieldError error = ex.getBindingResult().getFieldErrors().stream()
+                .filter(candidate -> candidate.getDefaultMessage() != null)
                 .findFirst()
-                .orElse("The message was not valid.");
-        reply(headers, ErrorResponse.of(ChatException.INVALID_MESSAGE, message));
+                .orElse(null);
+        String message = error == null ? "The message was not valid." : error.getDefaultMessage();
+        reply(headers, ErrorResponse.of(codeFor(error), message));
+    }
+
+    /**
+     * Bean Validation reports the offending <em>field</em>; the client needs to
+     * know the chat <em>concept</em> that was wrong. Without this mapping a bad
+     * username would be reported as {@link ChatException#INVALID_MESSAGE} simply
+     * because it was the DTO layer rather than the service layer that noticed.
+     */
+    private static String codeFor(FieldError error) {
+        if (error == null) {
+            return ChatException.INVALID_MESSAGE;
+        }
+        return switch (error.getField()) {
+            case "username" -> ChatException.INVALID_USERNAME;
+            case "recipient" -> ChatException.RECIPIENT_NOT_FOUND;
+            default -> ChatException.INVALID_MESSAGE;
+        };
     }
 
     /**
