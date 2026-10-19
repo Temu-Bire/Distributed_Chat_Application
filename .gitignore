@@ -9,7 +9,6 @@ release.properties
 *.class
 *.jar
 *.war
-!**/.mvn/wrapper/maven-wrapper.jar
 
 # IDE
 .idea/
