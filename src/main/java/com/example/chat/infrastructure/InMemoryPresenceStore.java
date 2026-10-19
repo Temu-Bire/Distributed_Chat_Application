@@ -33,6 +33,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * scaled out (see {@code docs/architecture.md}).</p>
  */
 @Component
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+    name = "chat.distributed.enabled",
+    havingValue = "false",
+    matchIfMissing = true
+)
 public class InMemoryPresenceStore implements PresenceStore {
 
     /** connection id → user */
