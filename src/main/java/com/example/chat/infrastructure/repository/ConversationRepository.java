@@ -1,0 +1,28 @@
+package com.example.chat.infrastructure.repository;
+
+import com.example.chat.domain.entity.ConversationEntity;
+import com.example.chat.domain.entity.ConversationType;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+
+@Repository
+public interface ConversationRepository extends JpaRepository<ConversationEntity, UUID> {
+
+    @Query("SELECT c FROM ConversationEntity c JOIN ConversationMemberEntity cm ON c.id = cm.conversationId " +
+           "WHERE cm.userId = :userId AND cm.archived = false ORDER BY c.updatedAt DESC")
+    List<ConversationEntity> findActiveConversationsForUser(@Param("userId") UUID userId);
+
+    @Query("SELECT c FROM ConversationEntity c " +
+           "JOIN ConversationMemberEntity cm1 ON c.id = cm1.conversationId " +
+           "JOIN ConversationMemberEntity cm2 ON c.id = cm2.conversationId " +
+           "WHERE c.type = 'DIRECT' AND cm1.userId = :user1Id AND cm2.userId = :user2Id")
+    Optional<ConversationEntity> findDirectConversationBetween(@Param("user1Id") UUID user1Id, @Param("user2Id") UUID user2Id);
+
+    Optional<ConversationEntity> findFirstByType(ConversationType type);
+}

@@ -1,29 +1,31 @@
 spring:
   application:
     name: chat-app
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/chat_db}
+    username: ${SPRING_DATASOURCE_USERNAME:postgres}
+    password: ${SPRING_DATASOURCE_PASSWORD:postgres}
+    driver-class-name: ${SPRING_DATASOURCE_DRIVER_CLASS_NAME:org.postgresql.Driver}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+  flyway:
+    enabled: ${SPRING_FLYWAY_ENABLED:false}
+    baseline-on-migrate: true
+  data:
+    redis:
+      host: ${SPRING_REDIS_HOST:localhost}
+      port: ${SPRING_REDIS_PORT:6379}
+      repositories:
+        enabled: false
 
 server:
-  port: 8080
+  port: ${PORT:8080}
 
-# ---------------------------------------------------------------------------
-# All chat settings have defaults declared in ChatProperties. Override them
-# here when you need to; nothing below is required for the defaults to work.
-#
-# chat:
-#   # Browser origins allowed to open the /ws handshake. Keep this tight.
-#   allowed-origins:
-#     - http://localhost:8080
-#     - http://127.0.0.1:8080
-#
-#   # Bounded STOMP channel executors (see docs/architecture.md, "Concurrency").
-#   inbound:  { core-pool-size: 4, max-pool-size: 16, queue-capacity: 500 }
-#   outbound: { core-pool-size: 4, max-pool-size: 16, queue-capacity: 1000 }
-#
-#   # Slow-client protection.
-#   send-time-limit-ms: 10000
-#   send-buffer-size-limit-bytes: 524288
-#   max-inbound-frame-bytes: 65536
-# ---------------------------------------------------------------------------
+chat:
+  distributed:
+    enabled: ${CHAT_DISTRIBUTED_ENABLED:false}
 
 logging:
   level:
