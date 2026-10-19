@@ -60,6 +60,19 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
             </plugin>
+
+            <!--
+                The Mockito inline mock maker attaches itself to the JVM at
+                runtime. Recent JDKs warn about that unless dynamic agent
+                loading is acknowledged, so it is enabled explicitly here.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>-XX:+EnableDynamicAgentLoading</argLine>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 </project>
