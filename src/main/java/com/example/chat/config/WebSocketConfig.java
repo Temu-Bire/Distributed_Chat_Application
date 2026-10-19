@@ -1,5 +1,6 @@
 package com.example.chat.config;
 
+import com.example.chat.application.MessageRouter;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.messaging.simp.config.ChannelRegistration;
 import org.springframework.messaging.simp.config.MessageBrokerRegistry;
@@ -71,10 +72,10 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
                 .setTaskScheduler(heartbeatScheduler());
 
         // Client sends go to /app/**, replies are published by MessageRouter.
-        registry.setApplicationDestinationPrefixes("/app");
+        registry.setApplicationDestinationPrefixes(MessageRouter.APP_PREFIX);
 
         // Enables convertAndSendToUser + the /user/queue/** subscriptions.
-        registry.setUserDestinationPrefix("/user");
+        registry.setUserDestinationPrefix(MessageRouter.USER_PREFIX);
     }
 
     @Override

@@ -17,14 +17,27 @@ import org.springframework.stereotype.Component;
  *
  * <h3>Destinations</h3>
  * <pre>
+ * /app/chat.join           (SEND)   register a display name
+ * /app/chat.send           (SEND)   public message
+ * /app/chat.private        (SEND)   private message
+ *
  * /topic/public            ChatMessageResponse   public CHAT messages
  * /topic/users             UserPresenceResponse  user list and join/leave events
  * /user/queue/private      ChatMessageResponse   private messages, one connection
  * /user/queue/errors       ErrorResponse         failures, one connection
  * </pre>
+ *
+ * <p>The two composing prefixes ({@link #APP_PREFIX} and {@link #USER_PREFIX})
+ * are held here as well, and are the values handed to the broker in
+ * {@code WebSocketConfig}. That makes this class the single source of truth
+ * for the wire contract the browser has to match, which is what
+ * {@code FrontendContractTest} checks.</p>
  */
 @Component
 public class MessageRouter {
+
+    public static final String APP_PREFIX = "/app";
+    public static final String USER_PREFIX = "/user";
 
     public static final String TOPIC_PUBLIC = "/topic/public";
     public static final String TOPIC_USERS = "/topic/users";

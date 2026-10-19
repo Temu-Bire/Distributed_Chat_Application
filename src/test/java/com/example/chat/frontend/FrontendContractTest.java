@@ -1,0 +1,88 @@
+package com.example.chat.frontend;
+
+import com.example.chat.application.MessageRouter;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * Guards the seam between the server and the browser client.
+ *
+ * <p>The two halves of this application are written in different languages and
+ * are wired up by convention, so a renamed destination or a new HTML sink in the
+ * page script would compile, start, and still be wrong: messages would simply
+ * stop arriving, or user content would become markup. Neither is caught by the
+ * behavioural tests, which speak the protocol directly rather than going
+ * through {@code chat.js}. These two checks read the shipped script instead and
+ * fail loudly if the contract drifts.</p>
+ */
+class FrontendContractTest {
+
+    private static final Path CHAT_JS = Path.of("src/main/resources/static/js/chat.js");
+
+    private static final Pattern DEST_MAP =
+            Pattern.compile("DEST\\s*=\\s*Object\\.freeze\\s*\\((\\{.*?})\\)\\s*;", Pattern.DOTALL);
+
+    private static final Pattern DEST_ENTRY =
+            Pattern.compile("([A-Z_]+)\\s*:\\s*'(/[^']*)'");
+
+    @Test
+    @DisplayName("the browser publishes to exactly the destinations the server serves")
+    void browserDestinationsMatchTheServer() throws IOException {
+        assertThat(CHAT_JS).as("the shipped browser client").isRegularFile();
+
+        Map<String, String> declared = destinationsIn(Files.readString(CHAT_JS, StandardCharsets.UTF_8));
+
+        assertThat(declared)
+                .as("the DEST map in chat.js")
+                .containsOnlyKeys("JOIN", "SEND", "PRIVATE", "PUBLIC", "USERS", "PRIVATE_BOX", "ERROR_BOX");
+
+        assertThat(declared.get("JOIN"))
+                .isEqualTo(MessageRouter.APP_PREFIX + "/chat.join");
+        assertThat(declared.get("SEND"))
+                .isEqualTo(MessageRouter.APP_PREFIX + "/chat.send");
+        assertThat(declared.get("PRIVATE"))
+                .isEqualTo(MessageRouter.APP_PREFIX + "/chat.private");
+        assertThat(declared.get("PUBLIC"))
+                .isEqualTo(MessageRouter.TOPIC_PUBLIC);
+        assertThat(declared.get("USERS"))
+                .isEqualTo(MessageRouter.TOPIC_USERS);
+        assertThat(declared.get("PRIVATE_BOX"))
+                .isEqualTo(MessageRouter.USER_PREFIX + MessageRouter.QUEUE_PRIVATE);
+        assertThat(declared.get("ERROR_BOX"))
+                .isEqualTo(MessageRouter.USER_PREFIX + MessageRouter.QUEUE_ERRORS);
+    }
+
+    @Test
+    @DisplayName("the browser client never writes user content as HTML")
+    void browserClientNeverAssignsHtml() throws IOException {
+        assertThat(Files.readString(CHAT_JS, StandardCharsets.UTF_8))
+                .as("user content must go through textContent; an HTML sink would let a "
+                        + "message body such as <img onerror=...> execute in the reader's browser")
+                .doesNotContainPattern("(?i)\\.(innerHTML|outerHTML|insertAdjacentHTML)\\s*=");
+    }
+
+    /** Pulls the {@code DEST} freeze block out of the script. */
+    private static Map<String, String> destinationsIn(String source) {
+        Matcher map = DEST_MAP.matcher(source);
+        assertThat(map.find()).as("the DEST freeze block in chat.js").isTrue();
+
+        Matcher entry = DEST_ENTRY.matcher(map.group(1));
+        Map<String, String> declared = new LinkedHashMap<>();
+        while (entry.find()) {
+            declared.put(entry.group(1), entry.group(2));
+        }
+        assertThat(declared).as("DEST entries").isNotEmpty();
+        return declared;
+    }
+}
