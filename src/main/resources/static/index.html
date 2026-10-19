@@ -1,74 +1,295 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Distributed Chat</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Chat App</title>
     <link rel="stylesheet" href="/css/styles.css">
 </head>
 <body>
 
-<header class="topbar">
-    <h1 class="topbar__title">Distributed Chat</h1>
-    <div class="topbar__info">
-        <span id="server-health" class="chip chip--muted" title="Result of GET /api/health">server: ?</span>
-        <span id="connection-status" class="chip chip--offline">
-            <span class="chip__dot" aria-hidden="true"></span>
-            <span id="connection-text">Disconnected</span>
-        </span>
-        <span id="identity" class="identity"></span>
-        <button id="leave-button" type="button" class="btn btn--ghost" hidden>Leave</button>
-    </div>
-</header>
+<!-- Backdrop for mobile drawer -->
+<div id="sidebar-backdrop" class="sidebar-backdrop" aria-hidden="true"></div>
 
-<!-- ── Join ─────────────────────────────────────────────────────────────── -->
-<main id="join-view" class="join">
-    <form id="join-form" class="card" autocomplete="off" novalidate>
-        <h2 class="card__title">Join the chat</h2>
-        <p class="card__hint">
-            Pick a display name. It must be unique while you are connected.
-            This MVP has no password &mdash; see the README for what that means.
-        </p>
+<!-- ── Main App Shell ──────────────────────────────────────────────────── -->
+<div class="app-layout">
+    
+    <!-- ── Left Sidebar ────────────────────────────────────────────────── -->
+    <aside id="sidebar" class="sidebar" aria-label="Sidebar navigation">
+        <!-- Brand / Logo -->
+        <div class="sidebar__brand">
+            <div class="brand-logo" aria-hidden="true">
+                <svg width="28" height="28" viewBox="0 0 32 32" fill="none">
+                    <rect width="32" height="32" rx="10" fill="#2563eb"/>
+                    <path d="M9 16C9 12.134 12.134 9 16 9C19.866 9 23 12.134 23 16C23 19.866 19.866 23 16 23C14.7 23 13.484 22.646 12.441 22.033L9 23L10.05 19.85C9.39 18.73 9 17.41 9 16Z" fill="white"/>
+                    <circle cx="13" cy="16" r="1.25" fill="#2563eb"/>
+                    <circle cx="16" cy="16" r="1.25" fill="#2563eb"/>
+                    <circle cx="19" cy="16" r="1.25" fill="#2563eb"/>
+                </svg>
+            </div>
+            <span class="brand-name">ChatApp</span>
+            <button id="sidebar-close-btn" class="sidebar-close-btn mobile-only" type="button" aria-label="Close sidebar">✕</button>
+        </div>
 
-        <label class="field">
-            <span class="field__label">Username</span>
-            <input id="username-input" name="username" type="text" maxlength="20"
-                   placeholder="e.g. alice" required autofocus>
-        </label>
+        <!-- Navigation Channels -->
+        <nav class="sidebar__nav" aria-label="Conversation channels">
+            <button id="nav-public-btn" class="nav-item is-active" type="button" aria-current="page">
+                <svg class="nav-item__icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                </svg>
+                <span class="nav-item__label">Public Chat</span>
+                <span id="public-unread-badge" class="nav-item__badge" hidden>0</span>
+            </button>
 
-        <p id="join-error" class="alert" role="alert" hidden></p>
+            <button id="nav-private-btn" class="nav-item" type="button">
+                <svg class="nav-item__icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="9" cy="7" r="4"></circle>
+                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                </svg>
+                <span class="nav-item__label">Private Messages</span>
+                <span id="private-unread-badge" class="nav-item__badge" hidden>0</span>
+            </button>
+        </nav>
 
-        <button id="join-button" type="submit" class="btn btn--primary">Connect</button>
-    </form>
-</main>
+        <!-- Online Users Section -->
+        <div class="sidebar__section">
+            <div class="section-header">
+                <div class="section-header__title">
+                    <span>Online Users</span>
+                    <span class="section-header__count">(<span id="user-count">0</span>)</span>
+                </div>
+                <span class="presence-dot presence-dot--online" aria-label="Online presence indicator"></span>
+            </div>
 
-<!-- ── Chat ─────────────────────────────────────────────────────────────── -->
-<main id="chat-view" class="chat" hidden>
-    <section class="chat__main">
-        <ol id="messages" class="messages" aria-live="polite" aria-label="Message history"></ol>
+            <!-- Search box -->
+            <div class="search-box">
+                <svg class="search-box__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <input id="user-search-input" class="search-box__input" type="text" placeholder="Search users…" autocomplete="off" spellcheck="false" aria-label="Search online users">
+                <button id="search-clear-btn" class="search-box__clear" type="button" aria-label="Clear search" hidden>✕</button>
+            </div>
 
-        <p id="chat-error" class="alert alert--inline" role="alert" hidden></p>
+            <!-- Users List -->
+            <ul id="user-list" class="users-list" aria-label="Online users list"></ul>
+        </div>
 
-        <form id="message-form" class="composer" autocomplete="off">
-            <label class="sr-only" for="recipient-select">Recipient</label>
-            <select id="recipient-select" class="composer__recipient" title="Send to everyone or one person">
-                <option value="">Everyone</option>
-            </select>
-
-            <label class="sr-only" for="message-input">Message</label>
-            <input id="message-input" class="composer__input" type="text" maxlength="2000"
-                   placeholder="Write a message…">
-
-            <button id="send-button" type="submit" class="btn btn--primary">Send</button>
-        </form>
-    </section>
-
-    <aside class="chat__aside" aria-label="Online users">
-        <h2 class="aside__title">Online <span id="user-count" class="badge">0</span></h2>
-        <ul id="user-list" class="users"></ul>
-        <p class="aside__hint">Select a name above to send a private message.</p>
+        <!-- Current User Profile Section at bottom -->
+        <div class="sidebar__profile">
+            <div class="profile-info">
+                <div id="current-user-avatar" class="avatar avatar--md avatar--purple" aria-hidden="true">?</div>
+                <div class="profile-details">
+                    <span id="identity" class="profile-name">Not joined</span>
+                    <div class="profile-status">
+                        <span class="status-indicator-dot"></span>
+                        <span id="connection-text-sidebar">Connected</span>
+                    </div>
+                </div>
+            </div>
+            <div class="profile-actions">
+                <button id="profile-settings-btn" class="icon-btn" type="button" title="Settings &amp; options" aria-label="Settings">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                    </svg>
+                </button>
+                <div id="settings-menu" class="dropdown-menu" hidden>
+                    <button id="reconnect-menu-btn" class="dropdown-item" type="button">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="23 4 23 10 17 10"></polyline>
+                            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                        </svg>
+                        <span>Reconnect</span>
+                    </button>
+                    <button id="leave-button" class="dropdown-item dropdown-item--danger" type="button">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                            <polyline points="16 17 21 12 16 7"></polyline>
+                            <line x1="21" y1="12" x2="9" y2="12"></line>
+                        </svg>
+                        <span>Leave Chat</span>
+                    </button>
+                </div>
+            </div>
+        </div>
     </aside>
-</main>
+
+    <!-- ── Main Chat Area ──────────────────────────────────────────────── -->
+    <main class="chat-container">
+        
+        <!-- Chat Header -->
+        <header class="chat-header">
+            <div class="chat-header__left">
+                <!-- Mobile hamburger button -->
+                <button id="mobile-menu-btn" class="icon-btn mobile-only" type="button" aria-label="Open sidebar menu">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="3" y1="12" x2="21" y2="12"></line>
+                        <line x1="3" y1="6" x2="21" y2="6"></line>
+                        <line x1="3" y1="18" x2="21" y2="18"></line>
+                    </svg>
+                </button>
+
+                <!-- Conversation icon badge -->
+                <div id="header-avatar" class="header-badge header-badge--group" aria-hidden="true">
+                    <svg id="header-group-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="9" cy="7" r="4"></circle>
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                    </svg>
+                    <span id="header-user-initial" hidden></span>
+                </div>
+
+                <!-- Conversation title and subtitle -->
+                <div class="header-titles">
+                    <h1 id="active-conversation-title" class="header-title">Public Chat</h1>
+                    <span id="active-conversation-subtitle" class="header-subtitle">0 online</span>
+                </div>
+            </div>
+
+            <div class="chat-header__right">
+                <!-- Server health chip -->
+                <span id="server-health" class="chip chip--muted" title="Result of GET /api/health">server: ?</span>
+
+                <!-- Connection status chip -->
+                <div id="connection-status" class="chip chip--online">
+                    <span class="chip__dot" aria-hidden="true"></span>
+                    <span id="connection-text">Connected</span>
+                </div>
+
+                <!-- Reconnect button (visible when disconnected) -->
+                <button id="reconnect-button" class="btn btn--sm btn--outline" type="button" hidden>
+                    Reconnect
+                </button>
+
+                <!-- Theme toggle button -->
+                <button id="theme-toggle-btn" class="icon-btn theme-toggle" type="button" aria-label="Toggle light or dark theme" title="Toggle theme">
+                    <svg class="sun-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="5"></circle>
+                        <line x1="12" y1="1" x2="12" y2="3"></line>
+                        <line x1="12" y1="21" x2="12" y2="23"></line>
+                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                        <line x1="1" y1="12" x2="3" y2="12"></line>
+                        <line x1="21" y1="12" x2="23" y2="12"></line>
+                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                    </svg>
+                    <svg class="moon-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <!-- Message history container -->
+        <div class="chat-body">
+            <div id="chat-view" class="chat-view-container">
+                <ol id="messages" class="messages" aria-live="polite" aria-label="Message history">
+                    <!-- Messages inserted safely via chat.js -->
+                </ol>
+
+                <!-- Scroll to bottom pill button -->
+                <button id="scroll-bottom-btn" class="scroll-bottom-btn" type="button" aria-label="Scroll to bottom" hidden>
+                    <span>New messages ↓</span>
+                </button>
+
+                <!-- In-chat error alert -->
+                <div id="chat-error" class="alert alert--inline" role="alert" hidden></div>
+            </div>
+
+            <!-- Composer bar -->
+            <form id="message-form" class="composer" autocomplete="off">
+                <!-- Keep recipient-select for contract compatibility -->
+                <select id="recipient-select" class="sr-only" title="Send to everyone or one person">
+                    <option value="">Everyone</option>
+                </select>
+
+                <!-- Emoji Picker Popover trigger -->
+                <div class="composer__actions-left">
+                    <button id="emoji-btn" class="icon-btn composer-icon-btn" type="button" aria-label="Insert emoji" title="Insert emoji">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
+                            <line x1="9" y1="9" x2="9.01" y2="9"></line>
+                            <line x1="15" y1="9" x2="15.01" y2="9"></line>
+                        </svg>
+                    </button>
+                    <!-- Quick emoji menu -->
+                    <div id="emoji-picker" class="emoji-picker-popover" hidden>
+                        <button type="button" class="emoji-item" data-emoji="😀">😀</button>
+                        <button type="button" class="emoji-item" data-emoji="👍">👍</button>
+                        <button type="button" class="emoji-item" data-emoji="❤️">❤️</button>
+                        <button type="button" class="emoji-item" data-emoji="🎉">🎉</button>
+                        <button type="button" class="emoji-item" data-emoji="🔥">🔥</button>
+                        <button type="button" class="emoji-item" data-emoji="🚀">🚀</button>
+                        <button type="button" class="emoji-item" data-emoji="👋">👋</button>
+                        <button type="button" class="emoji-item" data-emoji="✨">✨</button>
+                    </div>
+                </div>
+
+                <!-- Input area -->
+                <div class="composer__input-wrapper">
+                    <input id="message-input" class="composer__input" type="text" maxlength="2000" placeholder="Type a message…" autocomplete="off">
+                    <span id="char-counter" class="composer__counter" hidden>0/2000</span>
+                </div>
+
+                <!-- Send button -->
+                <button id="send-button" type="submit" class="composer__send-btn" aria-label="Send message" title="Send message">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                </button>
+            </form>
+        </div>
+    </main>
+</div>
+
+<!-- ── Join View Modal / Card ───────────────────────────────────────────── -->
+<div id="join-view" class="join-modal">
+    <div class="join-card">
+        <div class="join-card__header">
+            <div class="join-card__logo" aria-hidden="true">
+                <svg width="44" height="44" viewBox="0 0 32 32" fill="none">
+                    <rect width="32" height="32" rx="10" fill="#2563eb"/>
+                    <path d="M9 16C9 12.134 12.134 9 16 9C19.866 9 23 12.134 23 16C23 19.866 19.866 23 16 23C14.7 23 13.484 22.646 12.441 22.033L9 23L10.05 19.85C9.39 18.73 9 17.41 9 16Z" fill="white"/>
+                    <circle cx="13" cy="16" r="1.25" fill="#2563eb"/>
+                    <circle cx="16" cy="16" r="1.25" fill="#2563eb"/>
+                    <circle cx="19" cy="16" r="1.25" fill="#2563eb"/>
+                </svg>
+            </div>
+            <h1 class="join-card__title">Welcome to ChatApp</h1>
+            <p class="join-card__subtitle">Real-time messaging with WebSocket &amp; STOMP</p>
+        </div>
+
+        <form id="join-form" class="join-form" autocomplete="off" novalidate>
+            <div class="avatar-preview-wrapper">
+                <div id="join-avatar-preview" class="avatar avatar--lg avatar--purple" aria-hidden="true">?</div>
+            </div>
+
+            <div class="field">
+                <label class="field__label" for="username-input">Choose a username</label>
+                <div class="field__input-wrapper">
+                    <input id="username-input" name="username" type="text" maxlength="20" placeholder="e.g. alice" required autofocus autocomplete="off">
+                </div>
+                <span class="field__hint">1–20 characters. Must be unique while connected.</span>
+            </div>
+
+            <div id="join-error" class="alert alert--error" role="alert" hidden></div>
+
+            <button id="join-button" type="submit" class="btn btn--primary btn--block">
+                <span id="join-btn-text">Connect to Chat</span>
+            </button>
+        </form>
+    </div>
+</div>
+
+<!-- Toast Notifications Container -->
+<div id="toast-container" class="toast-container" aria-live="polite"></div>
 
 <script src="/js/vendor/stomp.umd.min.js"></script>
 <script src="/js/chat.js"></script>
