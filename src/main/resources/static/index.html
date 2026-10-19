@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Distributed Chat</title>
+    <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+    <h1 class="topbar__title">Distributed Chat</h1>
+    <div class="topbar__info">
+        <span id="server-health" class="chip chip--muted" title="Result of GET /api/health">server: ?</span>
+        <span id="connection-status" class="chip chip--offline">
+            <span class="chip__dot" aria-hidden="true"></span>
+            <span id="connection-text">Disconnected</span>
+        </span>
+        <span id="identity" class="identity"></span>
+        <button id="leave-button" type="button" class="btn btn--ghost" hidden>Leave</button>
+    </div>
+</header>
+
+<!-- ── Join ─────────────────────────────────────────────────────────────── -->
+<main id="join-view" class="join">
+    <form id="join-form" class="card" autocomplete="off" novalidate>
+        <h2 class="card__title">Join the chat</h2>
+        <p class="card__hint">
+            Pick a display name. It must be unique while you are connected.
+            This MVP has no password &mdash; see the README for what that means.
+        </p>
+
+        <label class="field">
+            <span class="field__label">Username</span>
+            <input id="username-input" name="username" type="text" maxlength="20"
+                   placeholder="e.g. alice" required autofocus>
+        </label>
+
+        <p id="join-error" class="alert" role="alert" hidden></p>
+
+        <button id="join-button" type="submit" class="btn btn--primary">Connect</button>
+    </form>
+</main>
+
+<!-- ── Chat ─────────────────────────────────────────────────────────────── -->
+<main id="chat-view" class="chat" hidden>
+    <section class="chat__main">
+        <ol id="messages" class="messages" aria-live="polite" aria-label="Message history"></ol>
+
+        <p id="chat-error" class="alert alert--inline" role="alert" hidden></p>
+
+        <form id="message-form" class="composer" autocomplete="off">
+            <label class="sr-only" for="recipient-select">Recipient</label>
+            <select id="recipient-select" class="composer__recipient" title="Send to everyone or one person">
+                <option value="">Everyone</option>
+            </select>
+
+            <label class="sr-only" for="message-input">Message</label>
+            <input id="message-input" class="composer__input" type="text" maxlength="2000"
+                   placeholder="Write a message…">
+
+            <button id="send-button" type="submit" class="btn btn--primary">Send</button>
+        </form>
+    </section>
+
+    <aside class="chat__aside" aria-label="Online users">
+        <h2 class="aside__title">Online <span id="user-count" class="badge">0</span></h2>
+        <ul id="user-list" class="users"></ul>
+        <p class="aside__hint">Select a name above to send a private message.</p>
+    </aside>
+</main>
+
+<script src="/js/vendor/stomp.umd.min.js"></script>
+<script src="/js/chat.js"></script>
+</body>
+</html>
