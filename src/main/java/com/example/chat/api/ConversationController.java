@@ -86,6 +86,15 @@ public class ConversationController {
         return ResponseEntity.ok(Map.of("message", "Member removed successfully"));
     }
 
+    @PostMapping("/{id}/leave")
+    public ResponseEntity<Map<String, String>> leaveGroup(
+            Principal principal,
+            @PathVariable("id") UUID conversationId) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        conversationService.removeMember(conversationId, user.id(), user.id());
+        return ResponseEntity.ok(Map.of("message", "Left group successfully"));
+    }
+
     @PutMapping("/{id}")
     public ResponseEntity<ConversationSummaryResponse> updateGroup(
             Principal principal,

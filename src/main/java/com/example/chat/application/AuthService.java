@@ -115,7 +115,9 @@ public class AuthService {
         UserEntity user = userRepository.findById(current.id())
             .orElseThrow(() -> new ChatException(ChatException.USER_NOT_FOUND, "User not found"));
 
-        user.setDisplayName(request.displayName().trim());
+        if (request.displayName() != null) {
+            user.setDisplayName(request.displayName().trim());
+        }
         if (request.bio() != null) {
             user.setBio(request.bio().trim());
         }

@@ -6,9 +6,11 @@ import com.example.chat.domain.entity.MemberRole;
 import com.example.chat.domain.entity.MessageEntity;
 import com.example.chat.dto.message.PersistentMessageResponse;
 import com.example.chat.exception.ChatException;
+import com.example.chat.infrastructure.redis.DistributedMessageRelay;
 import com.example.chat.infrastructure.repository.ConversationMemberRepository;
 import com.example.chat.infrastructure.repository.ConversationRepository;
 import com.example.chat.infrastructure.repository.MessageRepository;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
@@ -25,15 +27,18 @@ public class PersistentMessageService {
     private final ConversationRepository conversationRepository;
     private final ConversationMemberRepository memberRepository;
     private final SimpMessagingTemplate messagingTemplate;
+    private final ObjectProvider<DistributedMessageRelay> relayProvider;
 
     public PersistentMessageService(MessageRepository messageRepository,
                                   ConversationRepository conversationRepository,
                                   ConversationMemberRepository memberRepository,
-                                  SimpMessagingTemplate messagingTemplate) {
+                                  SimpMessagingTemplate messagingTemplate,
+                                  ObjectProvider<DistributedMessageRelay> relayProvider) {
         this.messageRepository = messageRepository;
         this.conversationRepository = conversationRepository;
         this.memberRepository = memberRepository;
         this.messagingTemplate = messagingTemplate;
+        this.relayProvider = relayProvider;
     }
 
     @Transactional
@@ -159,6 +164,15 @@ public class PersistentMessageService {
             messagingTemplate.convertAndSend(destination, frame);
         } catch (Exception e) {
             // Log warning; in distributed mode or without listeners, don't fail transaction
+        }
+
+        try {
+            DistributedMessageRelay relay = relayProvider != null ? relayProvider.getIfAvailable() : null;
+            if (relay != null) {
+                relay.publishCrossInstance(destination, frame);
+            }
+        } catch (Exception e) {
+            // Redis unavailable or serialization error; don't fail local transaction
         }
     }
 }

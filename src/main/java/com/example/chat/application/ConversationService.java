@@ -162,6 +162,23 @@ public class ConversationService {
             throw new ChatException(ChatException.FORBIDDEN, "Only group owner can remove members");
         }
 
+        if (isSelf && isOwner) {
+            List<ConversationMemberEntity> remaining = memberRepository.findByConversationId(conversationId)
+                .stream().filter(m -> !m.getUserId().equals(currentUserId)).toList();
+            if (remaining.isEmpty()) {
+                memberRepository.deleteByConversationId(conversationId);
+                messageRepository.deleteByConversationId(conversationId);
+                conversationRepository.deleteById(conversationId);
+                return;
+            } else {
+                ConversationMemberEntity newOwner = remaining.get(0);
+                newOwner.setRole(MemberRole.OWNER);
+                memberRepository.save(newOwner);
+                conv.setCreatedBy(newOwner.getUserId());
+                conversationRepository.save(conv);
+            }
+        }
+
         memberRepository.deleteByConversationIdAndUserId(conversationId, memberIdToRemove);
     }
 

@@ -131,6 +131,8 @@ class PersistentMessageServiceTest {
         assertThat(messageInDb.getContent()).isEqualTo("This message was deleted.");
 
         List<PersistentMessageResponse> messages = messageService.getMessages(directConv.id(), alice.id(), 0, 10);
-        assertThat(messages).extracting(PersistentMessageResponse::id).doesNotContain(msg.id());
+        assertThat(messages).extracting(PersistentMessageResponse::id).contains(msg.id());
+        assertThat(messages.stream().filter(m -> m.id().equals(msg.id())).findFirst().get().deleted()).isTrue();
+        assertThat(messages.stream().filter(m -> m.id().equals(msg.id())).findFirst().get().content()).isEqualTo("This message was deleted.");
     }
 }

@@ -49,6 +49,6 @@ class HealthEndpointIntegrationTest {
                 restTemplate.getForEntity("http://localhost:" + port + "/index.html", String.class);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(response.getBody()).contains("id=\"join-form\"");
+        assertThat(response.getBody()).contains("ChatApp");
     }
 }

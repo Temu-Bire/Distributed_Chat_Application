@@ -23,9 +23,21 @@ spring:
 server:
   port: ${PORT:8080}
 
+app:
+  upload:
+    dir: ${UPLOAD_DIR:./uploads}
+
 chat:
   distributed:
     enabled: ${CHAT_DISTRIBUTED_ENABLED:false}
+  inbound:
+    core-pool-size: 4
+    max-pool-size: 16
+    queue-capacity: 500
+  outbound:
+    core-pool-size: 4
+    max-pool-size: 16
+    queue-capacity: 500
 
 logging:
   level:

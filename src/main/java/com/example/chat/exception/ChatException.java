@@ -35,6 +35,10 @@ public class ChatException extends RuntimeException {
     public static final String BAD_CREDENTIALS = "BAD_CREDENTIALS";
     public static final String CONVERSATION_NOT_FOUND = "CONVERSATION_NOT_FOUND";
     public static final String NOT_MEMBER = "NOT_MEMBER";
+    public static final String ALREADY_FRIENDS = "ALREADY_FRIENDS";
+    public static final String REQUEST_ALREADY_EXISTS = "REQUEST_ALREADY_EXISTS";
+    public static final String REQUEST_NOT_FOUND = "REQUEST_NOT_FOUND";
+    public static final String CANNOT_FRIEND_SELF = "CANNOT_FRIEND_SELF";
 
     private final String code;
 

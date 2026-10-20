@@ -2,6 +2,7 @@ package com.example.chat.security;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -31,6 +32,8 @@ public class SecurityConfig {
                     "/index.html",
                     "/css/**",
                     "/js/**",
+                    "/images/**",
+                    "/uploads/**",
                     "/favicon.ico",
                     "/api/health",
                     "/api/auth/register",
@@ -38,6 +41,7 @@ public class SecurityConfig {
                     "/api/auth/status",
                     "/ws/**"
                 ).permitAll()
+                .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 .anyRequest().authenticated()
             )
             .formLogin(AbstractHttpConfigurer::disable)
