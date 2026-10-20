@@ -11,6 +11,7 @@ import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBr
 import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
 import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
 import org.springframework.web.socket.config.annotation.WebSocketTransportRegistration;
+import org.springframework.web.socket.server.support.HttpSessionHandshakeInterceptor;
 
 import java.util.concurrent.ThreadPoolExecutor;
 
@@ -60,8 +61,8 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
         registry.addEndpoint(ENDPOINT)
-                // Restricted explicitly: never expose the endpoint to all origins.
-                .setAllowedOrigins(properties.allowedOrigins().toArray(String[]::new))
+                .setAllowedOriginPatterns(properties.allowedOrigins().toArray(String[]::new))
+                .addInterceptors(new HttpSessionHandshakeInterceptor())
                 .setHandshakeHandler(new AnonymousHandshakeHandler());
     }
 

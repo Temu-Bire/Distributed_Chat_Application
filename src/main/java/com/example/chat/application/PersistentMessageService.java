@@ -153,7 +153,7 @@ public class PersistentMessageService {
     }
 
     private void broadcastConversationEvent(UUID conversationId, String eventType, Object payload) {
-        String destination = "/topic/conversations/" + conversationId;
+        String destination = MessageRouter.conversationTopic(conversationId);
         Map<String, Object> frame = Map.of(
             "event", eventType,
             "conversationId", conversationId,

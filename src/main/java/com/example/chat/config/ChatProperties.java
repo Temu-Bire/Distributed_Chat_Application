@@ -23,7 +23,7 @@ import java.util.List;
  */
 @ConfigurationProperties(prefix = "chat")
 public record ChatProperties(
-        @DefaultValue({"http://localhost:8080", "http://127.0.0.1:8080", "http://localhost:3000", "http://localhost:5173"}) List<String> allowedOrigins,
+        @DefaultValue({"http://localhost:*", "http://127.0.0.1:*", "http://localhost:3000", "http://localhost:5173"}) List<String> allowedOrigins,
         @DefaultValue Channel inbound,
         @DefaultValue Channel outbound,
         @DefaultValue("10000") int sendTimeLimitMs,

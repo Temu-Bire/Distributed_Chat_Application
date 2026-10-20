@@ -1,17 +1,22 @@
 package com.example.chat.websocket;
 
+import com.example.chat.application.AuthService;
 import com.example.chat.application.ChatService;
+import com.example.chat.application.PersistentMessageService;
 import com.example.chat.dto.ChatMessageRequest;
 import com.example.chat.dto.JoinRequest;
 import com.example.chat.dto.PrivateMessageRequest;
+import com.example.chat.dto.auth.UserProfileResponse;
 import com.example.chat.exception.ChatException;
 import jakarta.validation.Valid;
+import org.springframework.messaging.handler.annotation.DestinationVariable;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
 import org.springframework.stereotype.Controller;
 
 import java.security.Principal;
+import java.util.UUID;
 
 /**
  * Inbound STOMP adapter.
@@ -32,9 +37,15 @@ import java.security.Principal;
 public class ChatWebSocketController {
 
     private final ChatService chatService;
+    private final AuthService authService;
+    private final PersistentMessageService persistentMessageService;
 
-    public ChatWebSocketController(ChatService chatService) {
+    public ChatWebSocketController(ChatService chatService,
+                                   AuthService authService,
+                                   PersistentMessageService persistentMessageService) {
         this.chatService = chatService;
+        this.authService = authService;
+        this.persistentMessageService = persistentMessageService;
     }
 
     /** Registers this connection under a display name. */
@@ -53,6 +64,15 @@ public class ChatWebSocketController {
     @MessageMapping("/chat.private")
     public void sendPrivate(@Valid @Payload PrivateMessageRequest request, SimpMessageHeaderAccessor headers) {
         chatService.sendPrivateMessage(sessionId(headers), request.recipient(), request.content());
+    }
+
+    /** Sends a message into a persisted conversation over the WebSocket thread pool. */
+    @MessageMapping("/conversations/{conversationId}/send")
+    public void sendToConversation(@DestinationVariable UUID conversationId,
+                                   @Valid @Payload ChatMessageRequest request,
+                                   Principal principal) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        persistentMessageService.sendMessage(conversationId, user.id(), user.username(), request.content());
     }
 
     private static String sessionId(SimpMessageHeaderAccessor headers) {

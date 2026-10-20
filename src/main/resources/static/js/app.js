@@ -90,7 +90,13 @@
         if (!value) return '';
         const date = new Date(value);
         if (Number.isNaN(date.getTime())) return '';
-        return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        const now = new Date();
+        const sameDay = date.toDateString() === now.toDateString();
+        const yesterday = new Date(now);
+        yesterday.setDate(now.getDate() - 1);
+        if (sameDay) return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
+        return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
     }
 
     function isGroup(conv) {
@@ -152,7 +158,10 @@
         $('list-tabs').hidden = view !== 'chats' && view !== 'groups';
         $('conversation-list').hidden = view === 'friends';
         $('friends-side-list').hidden = view !== 'friends';
-        $('app-shell').classList.remove('show-chat', 'show-page');
+        $('app-shell').classList.remove('show-chat', 'show-page', 'is-wide');
+        if (view === 'friends' || view === 'requests' || view === 'settings' || view === 'group') {
+            $('app-shell').classList.add('is-wide');
+        }
 
         if (view === 'chats') {
             state.filter = 'all';
@@ -309,6 +318,9 @@
         const badge = $('requests-badge');
         badge.hidden = state.incoming.length === 0;
         badge.textContent = String(state.incoming.length);
+        $('incoming-count').textContent = '(' + state.incoming.length + ')';
+        $('outgoing-count').textContent = '(' + state.outgoing.length + ')';
+        $('friends-count').textContent = '(' + state.friends.length + ')';
     }
 
     async function actOnRequest(id, action) {
@@ -879,11 +891,15 @@
             if (!conv || !content) return;
             input.value = '';
             try {
-                const msg = await request('/conversations/' + conv.id + '/messages', {
-                    method: 'POST',
-                    body: JSON.stringify({ content: content })
-                });
-                upsertMessage(msg);
+                if (state.stomp) {
+                    state.stomp.send('/app/conversations/' + conv.id + '/send', { content: content });
+                } else {
+                    const msg = await request('/conversations/' + conv.id + '/messages', {
+                        method: 'POST',
+                        body: JSON.stringify({ content: content })
+                    });
+                    upsertMessage(msg);
+                }
             } catch (err) {
                 toast(err.message);
             }

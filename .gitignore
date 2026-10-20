@@ -31,3 +31,7 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Local H2 database and uploaded avatars
+data/
+uploads/

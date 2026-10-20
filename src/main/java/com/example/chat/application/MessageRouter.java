@@ -7,6 +7,8 @@ import com.example.chat.dto.UserPresenceResponse;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Component;
 
+import java.util.UUID;
+
 /**
  * The only class that knows STOMP destination names.
  *
@@ -43,6 +45,11 @@ public class MessageRouter {
     public static final String TOPIC_USERS = "/topic/users";
     public static final String QUEUE_PRIVATE = "/queue/private";
     public static final String QUEUE_ERRORS = "/queue/errors";
+    public static final String TOPIC_CONVERSATIONS = "/topic/conversations";
+
+    public static String conversationTopic(UUID conversationId) {
+        return TOPIC_CONVERSATIONS + "/" + conversationId;
+    }
 
     private final SimpMessagingTemplate messaging;
 
