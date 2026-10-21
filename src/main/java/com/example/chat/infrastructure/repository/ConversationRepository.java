@@ -2,9 +2,11 @@ package com.example.chat.infrastructure.repository;
 
 import com.example.chat.domain.entity.ConversationEntity;
 import com.example.chat.domain.entity.ConversationType;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -15,6 +17,17 @@ import java.util.UUID;
 
 @Repository
 public interface ConversationRepository extends JpaRepository<ConversationEntity, UUID> {
+
+    /**
+     * Locks the group row for the rest of the transaction. Every path that
+     * can insert a membership row takes this lock first, which turns the
+     * check-then-insert against {@code uq_conv_member} into a serialized
+     * critical section instead of a race that surfaces as a constraint
+     * violation mid-commit.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT c FROM ConversationEntity c WHERE c.id = :id")
+    Optional<ConversationEntity> findByIdForUpdate(@Param("id") UUID id);
 
     @Query("SELECT c FROM ConversationEntity c JOIN ConversationMemberEntity cm ON c.id = cm.conversationId " +
            "WHERE cm.userId = :userId AND cm.archived = false ORDER BY c.updatedAt DESC")

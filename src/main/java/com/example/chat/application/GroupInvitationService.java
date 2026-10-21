@@ -86,7 +86,7 @@ public class GroupInvitationService {
 
     @Transactional
     public GroupInvitationResponse acceptInvitation(UUID userId, UUID invitationId) {
-        GroupInvitationEntity invitation = groupInvitationRepository.findById(invitationId)
+        GroupInvitationEntity invitation = groupInvitationRepository.findByIdForUpdate(invitationId)
             .orElseThrow(() -> new ChatException(ChatException.REQUEST_NOT_FOUND, "Invitation not found"));
 
         if (!invitation.getInvitedUserId().equals(userId)) {
@@ -97,26 +97,25 @@ public class GroupInvitationService {
             throw new ChatException(ChatException.INVALID_COMMAND, "Invitation is not pending");
         }
 
-        if (groupBlockRepository.existsByGroupIdAndUserId(invitation.getGroupId(), userId)) {
-            throw new ChatException(ChatException.USER_BLOCKED, "You are blocked from this group");
-        }
+        // Fixed lock order invitation -> group, matching acceptJoinRequest;
+        // the group lock serializes this membership insert with joinGroup,
+        // addMember and request acceptance, so uq_conv_member cannot be hit
+        // by two racing transactions.
+        ConversationEntity group = conversationRepository.findByIdForUpdate(invitation.getGroupId())
+            .orElseThrow(() -> new ChatException(ChatException.CONVERSATION_NOT_FOUND, "Group not found"));
 
-        if (memberRepository.existsByConversationIdAndUserId(invitation.getGroupId(), userId)) {
-            invitation.setStatus(GroupInvitationStatus.ACCEPTED);
-            groupInvitationRepository.save(invitation);
-            ConversationEntity group = conversationRepository.findById(invitation.getGroupId()).orElse(null);
-            UserEntity inviter = userRepository.findById(invitation.getInviterId()).orElse(null);
-            UserEntity invitedUser = userRepository.findById(userId).orElse(null);
-            return mapToInvitationResponse(invitation, group, inviter, invitedUser);
+        if (groupBlockRepository.existsByGroupIdAndUserId(group.getId(), userId)) {
+            throw new ChatException(ChatException.USER_BLOCKED, "You are blocked from this group");
         }
 
         invitation.setStatus(GroupInvitationStatus.ACCEPTED);
         invitation = groupInvitationRepository.save(invitation);
 
-        ConversationMemberEntity newMember = new ConversationMemberEntity(invitation.getGroupId(), userId, MemberRole.MEMBER);
-        memberRepository.save(newMember);
+        if (!memberRepository.existsByConversationIdAndUserId(group.getId(), userId)) {
+            ConversationMemberEntity newMember = new ConversationMemberEntity(group.getId(), userId, MemberRole.MEMBER);
+            memberRepository.save(newMember);
+        }
 
-        ConversationEntity group = conversationRepository.findById(invitation.getGroupId()).orElse(null);
         UserEntity inviter = userRepository.findById(invitation.getInviterId()).orElse(null);
         UserEntity invitedUser = userRepository.findById(userId).orElse(null);
 
@@ -125,7 +124,7 @@ public class GroupInvitationService {
 
     @Transactional
     public GroupInvitationResponse rejectInvitation(UUID userId, UUID invitationId) {
-        GroupInvitationEntity invitation = groupInvitationRepository.findById(invitationId)
+        GroupInvitationEntity invitation = groupInvitationRepository.findByIdForUpdate(invitationId)
             .orElseThrow(() -> new ChatException(ChatException.REQUEST_NOT_FOUND, "Invitation not found"));
 
         if (!invitation.getInvitedUserId().equals(userId)) {
@@ -148,7 +147,7 @@ public class GroupInvitationService {
 
     @Transactional
     public void cancelInvitation(UUID inviterId, UUID invitationId) {
-        GroupInvitationEntity invitation = groupInvitationRepository.findById(invitationId)
+        GroupInvitationEntity invitation = groupInvitationRepository.findByIdForUpdate(invitationId)
             .orElseThrow(() -> new ChatException(ChatException.REQUEST_NOT_FOUND, "Invitation not found"));
 
         if (!invitation.getInviterId().equals(inviterId)) {

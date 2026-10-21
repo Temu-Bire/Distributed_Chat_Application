@@ -88,7 +88,7 @@ public class FriendService {
 
     @Transactional
     public FriendRequestResponse acceptFriendRequest(UUID currentUserId, UUID requestId) {
-        FriendRequestEntity request = friendRequestRepository.findById(requestId)
+        FriendRequestEntity request = friendRequestRepository.findByIdForUpdate(requestId)
             .orElseThrow(() -> new ChatException(ChatException.REQUEST_NOT_FOUND, "Friend request not found"));
 
         if (!request.getReceiverId().equals(currentUserId)) {
@@ -118,7 +118,7 @@ public class FriendService {
 
     @Transactional
     public FriendRequestResponse rejectFriendRequest(UUID currentUserId, UUID requestId) {
-        FriendRequestEntity request = friendRequestRepository.findById(requestId)
+        FriendRequestEntity request = friendRequestRepository.findByIdForUpdate(requestId)
             .orElseThrow(() -> new ChatException(ChatException.REQUEST_NOT_FOUND, "Friend request not found"));
 
         if (!request.getReceiverId().equals(currentUserId)) {
@@ -140,7 +140,7 @@ public class FriendService {
 
     @Transactional
     public FriendRequestResponse cancelFriendRequest(UUID currentUserId, UUID requestId) {
-        FriendRequestEntity request = friendRequestRepository.findById(requestId)
+        FriendRequestEntity request = friendRequestRepository.findByIdForUpdate(requestId)
             .orElseThrow(() -> new ChatException(ChatException.REQUEST_NOT_FOUND, "Friend request not found"));
 
         if (!request.getSenderId().equals(currentUserId)) {

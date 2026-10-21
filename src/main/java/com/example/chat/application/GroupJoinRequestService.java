@@ -37,7 +37,9 @@ public class GroupJoinRequestService {
 
     @Transactional
     public GroupJoinRequestResponse requestToJoin(UUID userId, UUID groupId) {
-        ConversationEntity group = conversationRepository.findById(groupId)
+        // Group row lock: keeps the member/request checks below atomic against
+        // concurrent joins and admin adds on the same group.
+        ConversationEntity group = conversationRepository.findByIdForUpdate(groupId)
             .orElseThrow(() -> new ChatException(ChatException.CONVERSATION_NOT_FOUND, "Group not found"));
 
         if (group.getType() != ConversationType.GROUP) {
@@ -66,7 +68,7 @@ public class GroupJoinRequestService {
 
     @Transactional
     public void cancelJoinRequest(UUID userId, UUID requestId) {
-        GroupJoinRequestEntity request = groupJoinRequestRepository.findById(requestId)
+        GroupJoinRequestEntity request = groupJoinRequestRepository.findByIdForUpdate(requestId)
             .orElseThrow(() -> new ChatException(ChatException.REQUEST_NOT_FOUND, "Join request not found"));
 
         if (!request.getUserId().equals(userId)) {
@@ -83,7 +85,10 @@ public class GroupJoinRequestService {
 
     @Transactional
     public GroupJoinRequestResponse acceptJoinRequest(UUID adminUserId, UUID requestId) {
-        GroupJoinRequestEntity request = groupJoinRequestRepository.findById(requestId)
+        // Request row first: a second admin accepting the same request blocks
+        // here and then sees ACCEPTED, instead of double-inserting the member
+        // and colliding with uq_conv_member at commit.
+        GroupJoinRequestEntity request = groupJoinRequestRepository.findByIdForUpdate(requestId)
             .orElseThrow(() -> new ChatException(ChatException.REQUEST_NOT_FOUND, "Join request not found"));
 
         ConversationMemberEntity adminMember = memberRepository.findByConversationIdAndUserId(request.getGroupId(), adminUserId)
@@ -97,17 +102,23 @@ public class GroupJoinRequestService {
             throw new ChatException(ChatException.INVALID_COMMAND, "Request is not pending");
         }
 
-        if (groupBlockRepository.existsByGroupIdAndUserId(request.getGroupId(), request.getUserId())) {
+        // Group row second (fixed lock order request -> group, and no path
+        // takes them the other way round): the membership insert below then
+        // serializes against joinGroup and addMember.
+        ConversationEntity group = conversationRepository.findByIdForUpdate(request.getGroupId())
+            .orElseThrow(() -> new ChatException(ChatException.CONVERSATION_NOT_FOUND, "Group not found"));
+
+        if (groupBlockRepository.existsByGroupIdAndUserId(group.getId(), request.getUserId())) {
             throw new ChatException(ChatException.USER_BLOCKED, "This user is blocked from the group");
         }
 
         request.setStatus(GroupJoinRequestStatus.ACCEPTED);
         request = groupJoinRequestRepository.save(request);
 
-        ConversationMemberEntity newMember = new ConversationMemberEntity(request.getGroupId(), request.getUserId(), MemberRole.MEMBER);
-        memberRepository.save(newMember);
+        if (!memberRepository.existsByConversationIdAndUserId(group.getId(), request.getUserId())) {
+            memberRepository.save(new ConversationMemberEntity(group.getId(), request.getUserId(), MemberRole.MEMBER));
+        }
 
-        ConversationEntity group = conversationRepository.findById(request.getGroupId()).orElse(null);
         UserEntity user = userRepository.findById(request.getUserId()).orElse(null);
 
         return mapToJoinRequestResponse(request, group, user);
@@ -115,7 +126,7 @@ public class GroupJoinRequestService {
 
     @Transactional
     public GroupJoinRequestResponse rejectJoinRequest(UUID adminUserId, UUID requestId) {
-        GroupJoinRequestEntity request = groupJoinRequestRepository.findById(requestId)
+        GroupJoinRequestEntity request = groupJoinRequestRepository.findByIdForUpdate(requestId)
             .orElseThrow(() -> new ChatException(ChatException.REQUEST_NOT_FOUND, "Join request not found"));
 
         ConversationMemberEntity adminMember = memberRepository.findByConversationIdAndUserId(request.getGroupId(), adminUserId)

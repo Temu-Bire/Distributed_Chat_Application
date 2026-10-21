@@ -6,13 +6,22 @@ import com.example.chat.dto.group.BlockedUserResponse;
 import com.example.chat.exception.ChatException;
 import com.example.chat.infrastructure.repository.*;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.*;
 
 @Service
 public class ConversationService {
+
+    /**
+     * Striped monitors guarding direct-conversation creation. A pair of users
+     * maps to one stripe deterministically, so two threads opening the same
+     * DM - from either side - always queue on the same object.
+     */
+    private static final int PAIR_LOCK_STRIPES = 64;
 
     private final ConversationRepository conversationRepository;
     private final ConversationMemberRepository memberRepository;
@@ -22,6 +31,8 @@ public class ConversationService {
     private final GroupJoinRequestRepository groupJoinRequestRepository;
     private final GroupInvitationRepository groupInvitationRepository;
     private final PresenceService presenceService;
+    private final TransactionTemplate transactionTemplate;
+    private final Object[] pairLocks;
 
     public ConversationService(ConversationRepository conversationRepository,
                                ConversationMemberRepository memberRepository,
@@ -30,7 +41,8 @@ public class ConversationService {
                                GroupBlockRepository groupBlockRepository,
                                GroupJoinRequestRepository groupJoinRequestRepository,
                                GroupInvitationRepository groupInvitationRepository,
-                               PresenceService presenceService) {
+                               PresenceService presenceService,
+                               PlatformTransactionManager transactionManager) {
         this.conversationRepository = conversationRepository;
         this.memberRepository = memberRepository;
         this.userRepository = userRepository;
@@ -39,14 +51,33 @@ public class ConversationService {
         this.groupJoinRequestRepository = groupJoinRequestRepository;
         this.groupInvitationRepository = groupInvitationRepository;
         this.presenceService = presenceService;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
+        this.pairLocks = new Object[PAIR_LOCK_STRIPES];
+        for (int i = 0; i < PAIR_LOCK_STRIPES; i++) {
+            pairLocks[i] = new Object();
+        }
     }
 
-    @Transactional
+    /**
+     * No conversation row exists yet to put a database lock on, so the
+     * check-then-create of a DM is serialized on a striped JVM monitor and
+     * the create runs inside a transaction that commits before the monitor is
+     * released - the second thread's re-check then sees the first one's row.
+     * Scope: per node; multi-node deployments can still occasionally mint a
+     * duplicate DM (cosmetic - both stay usable, nothing is lost).
+     */
     public ConversationSummaryResponse getOrCreateDirect(UUID currentUserId, UUID targetUserId) {
         if (currentUserId.equals(targetUserId)) {
             throw new ChatException(ChatException.INVALID_COMMAND, "Cannot start a conversation with yourself");
         }
 
+        synchronized (pairLockFor(currentUserId, targetUserId)) {
+            return transactionTemplate.execute(status ->
+                getOrCreateDirectInTx(currentUserId, targetUserId));
+        }
+    }
+
+    private ConversationSummaryResponse getOrCreateDirectInTx(UUID currentUserId, UUID targetUserId) {
         UserEntity targetUser = userRepository.findById(targetUserId)
             .orElseThrow(() -> new ChatException(ChatException.USER_NOT_FOUND, "Target user not found"));
 
@@ -71,6 +102,12 @@ public class ConversationService {
         memberRepository.saveAll(List.of(member1, member2));
 
         return mapToSummary(conv, currentUserId);
+    }
+
+    private Object pairLockFor(UUID a, UUID b) {
+        int lo = a.compareTo(b) < 0 ? a.hashCode() : b.hashCode();
+        int hi = a.compareTo(b) < 0 ? b.hashCode() : a.hashCode();
+        return pairLocks[Math.floorMod(31 * lo + hi, PAIR_LOCK_STRIPES)];
     }
 
     @Transactional
@@ -102,7 +139,10 @@ public class ConversationService {
      */
     @Transactional
     public ConversationSummaryResponse joinGroup(UUID conversationId, UUID currentUserId) {
-        ConversationEntity conv = conversationRepository.findById(conversationId)
+        // Row lock: the exists-check below is only meaningful if competing
+        // joins for this group serialize here instead of both inserting and
+        // one colliding with uq_conv_member at commit.
+        ConversationEntity conv = conversationRepository.findByIdForUpdate(conversationId)
             .orElseThrow(() -> new ChatException(ChatException.CONVERSATION_NOT_FOUND, "Group not found"));
 
         if (conv.getType() != ConversationType.GROUP) {
@@ -162,7 +202,7 @@ public class ConversationService {
     @Transactional
     public void addMember(UUID conversationId, UUID currentUserId, AddMemberRequest request) {
         ConversationMemberEntity currentMember = requireMembership(conversationId, currentUserId);
-        ConversationEntity conv = conversationRepository.findById(conversationId)
+        ConversationEntity conv = conversationRepository.findByIdForUpdate(conversationId)
             .orElseThrow(() -> new ChatException(ChatException.CONVERSATION_NOT_FOUND, "Conversation not found"));
 
         if (conv.getType() == ConversationType.DIRECT) {

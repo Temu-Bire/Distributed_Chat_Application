@@ -20,6 +20,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Instant;
 import java.util.*;
@@ -54,6 +56,7 @@ public class PersistentMessageService {
         this.rateLimiter = rateLimiter;
     }
 
+    @Transactional
     public PersistentMessageResponse sendMessage(UUID conversationId, UUID senderId, String senderUsername, String content) {
         return sendMessage(conversationId, senderId, senderUsername, content, null, null);
     }
@@ -71,6 +74,16 @@ public class PersistentMessageService {
         String normalizedClientId = clientMessageId == null || clientMessageId.isBlank()
             ? null
             : clientMessageId.trim();
+
+        // The conversation row is locked before anything is read or written:
+        // two threads racing the same clientMessageId (a client retrying an
+        // unacknowledged send) would otherwise both miss the pre-check and
+        // one would die on uq_msg_client_id at commit time. With the lock,
+        // the loser re-reads after the winner committed and gets the original
+        // message back instead of an error. The same lock makes the summary
+        // update below race-free: lastMessageText can never be lost.
+        ConversationEntity conv = conversationRepository.findByIdForUpdate(conversationId)
+            .orElseThrow(() -> new ChatException(ChatException.CONVERSATION_NOT_FOUND, "Conversation not found"));
 
         // Retry of an already-persisted send: return the original, never a duplicate.
         if (normalizedClientId != null) {
@@ -91,9 +104,6 @@ public class PersistentMessageService {
 
         ConversationMemberEntity member = memberRepository.findByConversationIdAndUserId(conversationId, senderId)
             .orElseThrow(() -> new ChatException(ChatException.NOT_MEMBER, "You are not a member of this conversation"));
-
-        ConversationEntity conv = conversationRepository.findById(conversationId)
-            .orElseThrow(() -> new ChatException(ChatException.CONVERSATION_NOT_FOUND, "Conversation not found"));
 
         if (replyToId != null) {
             MessageEntity target = messageRepository.findById(replyToId)
@@ -212,7 +222,10 @@ public class PersistentMessageService {
         }
         String normalizedEmoji = emoji.trim();
 
-        MessageEntity message = messageRepository.findById(messageId)
+        // Lock the message: two readers tapping the same emoji simultaneously
+        // must not both pass the "not reacted yet" check and collide on
+        // uq_message_reaction while committing.
+        MessageEntity message = messageRepository.findByIdForUpdate(messageId)
             .orElseThrow(() -> new ChatException(ChatException.MESSAGE_NOT_FOUND, "Message not found"));
 
         if (message.isDeleted()) {
@@ -289,19 +302,37 @@ public class PersistentMessageService {
             "data", payload,
             "timestamp", Instant.now().toString()
         );
-        try {
-            messagingTemplate.convertAndSend(destination, frame);
-        } catch (Exception e) {
-            // Log warning; in distributed mode or without listeners, don't fail transaction
-        }
 
-        try {
-            DistributedMessageRelay relay = relayProvider != null ? relayProvider.getIfAvailable() : null;
-            if (relay != null) {
-                relay.publishCrossInstance(destination, frame);
+        // Only after the row is durably committed may the fan-out start:
+        // a frame published inside the transaction would reach subscribers
+        // with a message body that a rollback could still erase, and a client
+        // that immediately fetched history would not find it.
+        Runnable publish = () -> {
+            try {
+                messagingTemplate.convertAndSend(destination, frame);
+            } catch (Exception e) {
+                // Log warning; in distributed mode or without listeners, don't fail the committed send
             }
-        } catch (Exception e) {
-            // Redis unavailable or serialization error; don't fail local transaction
+
+            try {
+                DistributedMessageRelay relay = relayProvider != null ? relayProvider.getIfAvailable() : null;
+                if (relay != null) {
+                    relay.publishCrossInstance(destination, frame);
+                }
+            } catch (Exception e) {
+                // Redis unavailable or serialization error; the local commit stands
+            }
+        };
+
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    publish.run();
+                }
+            });
+        } else {
+            publish.run();
         }
     }
 }

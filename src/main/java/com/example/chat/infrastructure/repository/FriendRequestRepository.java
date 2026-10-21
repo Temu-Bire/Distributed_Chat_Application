@@ -2,7 +2,9 @@ package com.example.chat.infrastructure.repository;
 
 import com.example.chat.domain.entity.FriendRequestEntity;
 import com.example.chat.domain.entity.FriendRequestStatus;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -13,6 +15,11 @@ import java.util.UUID;
 
 @Repository
 public interface FriendRequestRepository extends JpaRepository<FriendRequestEntity, UUID> {
+
+    /** Row lock: accept and reject of one request cannot both win. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT r FROM FriendRequestEntity r WHERE r.id = :id")
+    Optional<FriendRequestEntity> findByIdForUpdate(@Param("id") UUID id);
 
     List<FriendRequestEntity> findByReceiverIdAndStatusOrderByCreatedAtDesc(UUID receiverId, FriendRequestStatus status);
 
