@@ -22,17 +22,20 @@ public class GroupJoinRequestService {
     private final ConversationMemberRepository memberRepository;
     private final UserRepository userRepository;
     private final GroupBlockRepository groupBlockRepository;
+    private final NotificationService notificationService;
 
     public GroupJoinRequestService(GroupJoinRequestRepository groupJoinRequestRepository,
                                      ConversationRepository conversationRepository,
                                      ConversationMemberRepository memberRepository,
                                      UserRepository userRepository,
-                                     GroupBlockRepository groupBlockRepository) {
+                                     GroupBlockRepository groupBlockRepository,
+                                     NotificationService notificationService) {
         this.groupJoinRequestRepository = groupJoinRequestRepository;
         this.conversationRepository = conversationRepository;
         this.memberRepository = memberRepository;
         this.userRepository = userRepository;
         this.groupBlockRepository = groupBlockRepository;
+        this.notificationService = notificationService;
     }
 
     @Transactional
@@ -62,6 +65,10 @@ public class GroupJoinRequestService {
         request = groupJoinRequestRepository.save(request);
 
         UserEntity user = userRepository.findById(userId).orElse(null);
+
+        if (user != null) {
+            notificationService.notifyJoinRequest(user.getId(), user.getUsername(), group.getId(), group.getTitle());
+        }
 
         return mapToJoinRequestResponse(request, group, user);
     }
@@ -120,6 +127,13 @@ public class GroupJoinRequestService {
         }
 
         UserEntity user = userRepository.findById(request.getUserId()).orElse(null);
+
+        if (user != null) {
+            String actorUsername = userRepository.findById(adminUserId)
+                .map(admin -> admin.getUsername())
+                .orElse("a group admin");
+            notificationService.notifyJoinAccepted(user.getId(), actorUsername, group.getId(), group.getTitle());
+        }
 
         return mapToJoinRequestResponse(request, group, user);
     }

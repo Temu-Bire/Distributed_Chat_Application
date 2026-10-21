@@ -30,6 +30,10 @@ import java.util.UUID;
  * <ul>
  *   <li>{@code /topic/conversations/**} requires an authenticated session
  *       whose user is a member of that conversation.</li>
+ *   <li>{@code /topic/notifications/{userId}} requires an authenticated
+ *       session whose user <em>is</em> that id; notifications are published to
+ *       a topic so they survive a multi-instance deployment, and this check is
+ *       what keeps them private.</li>
  *   <li>{@code /topic/users} requires an authenticated session.</li>
  *   <li>{@code /user/queue/**} is already scoped by Spring to the owning
  *       connection, so anything is allowed.</li>
@@ -63,6 +67,9 @@ public class StompSubscriptionGuard implements ChannelInterceptor {
         if (destination.startsWith(MessageRouter.TOPIC_CONVERSATIONS + "/")) {
             UUID conversationId = parseConversationId(destination);
             requireMember(authenticatedUsername(accessor), conversationId);
+        } else if (destination.startsWith(MessageRouter.TOPIC_NOTIFICATIONS + "/")) {
+            requireOwnNotifications(authenticatedUsername(accessor),
+                    destination.substring(MessageRouter.TOPIC_NOTIFICATIONS.length() + 1));
         } else if (destination.equals(MessageRouter.TOPIC_USERS)) {
             authenticatedUsername(accessor);
         }
@@ -80,6 +87,26 @@ public class StompSubscriptionGuard implements ChannelInterceptor {
             throw new AccessDeniedException("Sign-in required for this subscription");
         }
         return user.getName();
+    }
+
+    /**
+     * Notifications are content: they quote message previews and name the
+     * person who requested your friendship. The owner's id in the destination
+     * is therefore checked against the session's own user, not guessed at.
+     */
+    private void requireOwnNotifications(String username, String rawUserId) {
+        UUID userId = userRepository.findByUsernameIgnoreCase(username)
+                .map(user -> user.getId())
+                .orElseThrow(() -> new AccessDeniedException("Unknown account"));
+        UUID owner;
+        try {
+            owner = UUID.fromString(rawUserId);
+        } catch (IllegalArgumentException ex) {
+            throw new AccessDeniedException("Unknown notifications destination");
+        }
+        if (!userId.equals(owner)) {
+            throw new AccessDeniedException("Notifications are private to their owner");
+        }
     }
 
     private void requireMember(String username, UUID conversationId) {

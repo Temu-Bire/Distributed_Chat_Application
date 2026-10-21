@@ -39,8 +39,14 @@
         pinned: [],
         search: { open: false, query: '', results: null, conversationId: null, timer: null },
         pages: {},
-        pendingAttachment: null
+        pendingAttachment: null,
+        notifications: [],
+        unreadNotifications: 0,
+        soundEnabled: true
     };
+
+    /** Live notifications are session-scoped: the server gates them by preference. */
+    const NOTIFICATION_LIMIT = 30;
 
     const $ = (id) => document.getElementById(id);
 
@@ -73,10 +79,22 @@
         }
     }
 
-    function toast(message) {
+    function toast(message, onClick, durationMs) {
         const item = el('div', 'toast', message);
+        if (onClick) {
+            item.classList.add('toast--clickable');
+            item.setAttribute('role', 'button');
+            item.setAttribute('tabindex', '0');
+            item.addEventListener('click', onClick);
+            item.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    onClick();
+                }
+            });
+        }
         $('toast-container').appendChild(item);
-        setTimeout(() => item.remove(), 3200);
+        setTimeout(() => item.remove(), durationMs || 3200);
     }
 
     function showError(node, message) {
@@ -936,6 +954,11 @@
             $('pref-notifications').checked = settings.notificationsEnabled;
             $('pref-sound').checked = settings.soundEnabled;
             $('pref-online').checked = settings.onlineVisibility;
+            $('pref-notify-messages').checked = settings.notifyMessages;
+            $('pref-notify-mentions').checked = settings.notifyMentions;
+            $('pref-notify-friend-requests').checked = settings.notifyFriendRequests;
+            $('pref-notify-group-activity').checked = settings.notifyGroupActivity;
+            state.soundEnabled = settings.soundEnabled;
         } catch (err) {
             applyTheme(state.theme);
         }
@@ -1576,10 +1599,16 @@
         actions.appendChild(cancel);
     }
 
+    /** STOMP heartbeats: what we ask the broker for, and what we honour back. */
+    const HEARTBEAT_INTERVAL_MS = 10_000;
+
     function createStompClient() {
         let socket = null;
         let connected = false;
         let counter = 0;
+        let heartbeatTimer = null;
+        let lastInboundAt = 0;
+        let lastOutboundAt = 0;
         const handlers = {};
 
         function frame(command, headers, body) {
@@ -1588,10 +1617,48 @@
                 out += key + ':' + headers[key] + '\n';
             });
             out += '\n' + (body || '') + '\0';
+            lastOutboundAt = Date.now();
             socket.send(out);
         }
 
+        function stopHeartbeat() {
+            if (heartbeatTimer) {
+                clearInterval(heartbeatTimer);
+                heartbeatTimer = null;
+            }
+        }
+
+        /**
+         * STOMP 1.1 keepalive, both directions.
+         *
+         * <p>The broker only keeps a connection it has asked for heartbeats
+         * (we send heart-beat:10000,10000 in CONNECT). A client that goes quiet
+         * is declared dead and closed, which is what a tab that merely sits
+         * there and receives nothing would hit. So: emit a lone newline when we
+         * have not sent a frame for one interval, and if nothing at all comes
+         * back for three intervals, close the socket ourselves so the reconnect
+         * path can rebuild the session instead of silently losing live events.</p>
+         */
+        function startHeartbeat() {
+            stopHeartbeat();
+            lastInboundAt = Date.now();
+            heartbeatTimer = setInterval(() => {
+                if (!socket || socket.readyState !== WebSocket.OPEN) return;
+                const now = Date.now();
+                if (now - lastInboundAt > HEARTBEAT_INTERVAL_MS * 3) {
+                    stopHeartbeat();
+                    socket.close();
+                    return;
+                }
+                if (now - lastOutboundAt >= HEARTBEAT_INTERVAL_MS) {
+                    lastOutboundAt = now;
+                    socket.send('\n');
+                }
+            }, 2000);
+        }
+
         function parse(raw) {
+            lastInboundAt = Date.now();
             const chunks = raw.split('\0');
             chunks.forEach((chunk) => {
                 if (!chunk || chunk === '\n') return;
@@ -1607,6 +1674,7 @@
                 });
                 if (command === 'CONNECTED') {
                     connected = true;
+                    startHeartbeat();
                     if (handlers.connect) handlers.connect();
                 } else if (command === 'MESSAGE') {
                     const dest = headers.destination;
@@ -1628,14 +1696,21 @@
                 socket = new WebSocket(proto + '//' + location.host + '/ws');
                 socket.onopen = () => frame('CONNECT', {
                     'accept-version': '1.1,1.2',
-                    'heart-beat': '10000,10000'
+                    'heart-beat': HEARTBEAT_INTERVAL_MS + ',' + HEARTBEAT_INTERVAL_MS
                 });
                 socket.onmessage = (event) => {
                     const text = typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data);
                     parse(text);
                 };
                 socket.onerror = () => onError && onError('WebSocket error');
-                socket.onclose = () => { connected = false; };
+                // A clean-looking close is the common case (broker restart, idle
+                // timeout, network blip), and STOMP has no reply to wait for:
+                // treat it exactly like the error path so the session is rebuilt.
+                socket.onclose = () => {
+                    connected = false;
+                    stopHeartbeat();
+                    if (handlers.error) handlers.error('WebSocket closed');
+                };
             },
             subscribe(destination, cb) {
                 handlers[destination] = cb;
@@ -1649,11 +1724,15 @@
                 }, JSON.stringify(body));
             },
             disconnect() {
+                stopHeartbeat();
                 if (socket && socket.readyState === WebSocket.OPEN) {
                     frame('DISCONNECT', {});
                     socket.close();
                 }
                 connected = false;
+            },
+            isConnected() {
+                return connected;
             }
         };
     }
@@ -1689,26 +1768,193 @@
         state.subscriptions.set(id, dest);
     }
 
+    function subscribeNotifications() {
+        if (!state.stomp || !state.user) return;
+        // Per-user topic, not /user/queue: the server relays topics between
+        // backend instances, so the notification follows the user's session
+        // wherever it happens to be connected.
+        state.stomp.subscribe('/topic/notifications/' + state.user.id, onNotification);
+    }
+
+    function onNotification(notification) {
+        if (!notification || !notification.type) return;
+        state.notifications.unshift(notification);
+        if (state.notifications.length > NOTIFICATION_LIMIT) {
+            state.notifications.length = NOTIFICATION_LIMIT;
+        }
+        state.unreadNotifications++;
+        renderNotificationBadge();
+
+        const alreadyLooking = state.currentConversation
+            && String(state.currentConversation.id) === String(notification.conversationId);
+        if (!alreadyLooking) {
+            toast(notificationText(notification), () => openNotification(notification), 5000);
+            playNotificationSound();
+        }
+
+        if (notification.type === 'FRIEND_REQUEST'
+            || notification.type === 'FRIEND_REQUEST_ACCEPTED'
+            || notification.type === 'GROUP_INVITE') {
+            loadFriends().catch(() => {});
+        }
+    }
+
+    function notificationText(n) {
+        const who = n.actorUsername || 'Someone';
+        const where = n.title ? '[' + n.title + '] ' : '';
+        const preview = n.body ? ' \u2014 ' + n.body : '';
+        switch (n.type) {
+            case 'MENTION': return where + who + ' mentioned you' + preview;
+            case 'REPLY': return where + who + ' replied to you' + preview;
+            case 'NEW_MESSAGE': return where + who + preview;
+            case 'FRIEND_REQUEST': return who + ' sent you a friend request' + preview;
+            case 'FRIEND_REQUEST_ACCEPTED': return who + ' accepted your friend request';
+            case 'GROUP_INVITE': return who + ' invited you to ' + (n.title || 'a group');
+            case 'GROUP_JOIN_REQUEST': return who + ' asked to join ' + (n.title || 'your group');
+            case 'GROUP_JOIN_ACCEPTED': return 'You joined ' + (n.title || 'the group');
+            default: return n.body || 'New notification';
+        }
+    }
+
+    function openNotification(n) {
+        if (n.type === 'FRIEND_REQUEST' || n.type === 'FRIEND_REQUEST_ACCEPTED' || n.type === 'GROUP_INVITE') {
+            openView('requests');
+            return;
+        }
+        if (!n.conversationId) {
+            openView('chats');
+            return;
+        }
+        const known = (state.conversations || []).some((conv) => String(conv.id) === String(n.conversationId));
+        if (known) {
+            openView('chats', { conversationId: n.conversationId });
+            return;
+        }
+        // Joining a group happens server-side, so the new conversation is not
+        // in the local list yet: refetch once, then open it.
+        loadConversations()
+            .then(() => openView('chats', { conversationId: n.conversationId }))
+            .catch(() => toast('Could not load that conversation'));
+    }
+
+    function renderNotificationBadge() {
+        const badge = $('notifications-badge');
+        badge.hidden = state.unreadNotifications === 0;
+        badge.textContent = String(Math.min(state.unreadNotifications, 99));
+    }
+
+    function openNotificationsModal() {
+        state.unreadNotifications = 0;
+        renderNotificationBadge();
+        const { body } = openModal('Notifications');
+        if (!state.notifications.length) {
+            body.appendChild(el('div', 'empty', 'No notifications yet in this session'));
+            return;
+        }
+        const list = el('div', 'card-list');
+        state.notifications.forEach((n) => {
+            const row = el('button', 'notif-row');
+            row.type = 'button';
+            const text = el('div');
+            text.appendChild(el('strong', '', notificationText(n)));
+            text.appendChild(el('span', 'muted', formatTime(n.createdAt) + ' \u00b7 ' + (n.category || '').toLowerCase()));
+            row.appendChild(text);
+            row.addEventListener('click', () => {
+                closeModal();
+                openNotification(n);
+            });
+            list.appendChild(row);
+        });
+        body.appendChild(list);
+    }
+
+    let soundContext = null;
+
+    function playNotificationSound() {
+        if (!state.soundEnabled) return;
+        try {
+            const AudioCtor = window.AudioContext || window.webkitAudioContext;
+            if (!AudioCtor) return;
+            soundContext = soundContext || new AudioCtor();
+            if (soundContext.state === 'suspended' && soundContext.resume) soundContext.resume();
+            const oscillator = soundContext.createOscillator();
+            const gain = soundContext.createGain();
+            oscillator.type = 'sine';
+            oscillator.frequency.value = 660;
+            gain.gain.setValueAtTime(0.0001, soundContext.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.05, soundContext.currentTime + 0.02);
+            gain.gain.exponentialRampToValueAtTime(0.0001, soundContext.currentTime + 0.35);
+            oscillator.connect(gain);
+            gain.connect(soundContext.destination);
+            oscillator.start();
+            oscillator.stop(soundContext.currentTime + 0.36);
+        } catch (err) {
+            // Browsers refuse sound until the page has been interacted with;
+            // a blocked beep must never break the notification itself.
+        }
+    }
+
+    let reconnectDelay = 1000;
+    let reconnectTimer = null;
+
+    function cancelReconnect() {
+        if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+        }
+        reconnectDelay = 1000;
+    }
+
+    function scheduleReconnect() {
+        // The socket error and close paths can both fire for one dropped
+        // connection, and an error during a retry re-enters here; a single
+        // pending timer keeps the cadence sane, and backoff stops a dead
+        // backend from being hammered.
+        if (!state.user || reconnectTimer) return;
+        reconnectTimer = setTimeout(() => {
+            reconnectTimer = null;
+            connectWebSocket();
+        }, reconnectDelay);
+        reconnectDelay = Math.min(reconnectDelay * 2, 15000);
+    }
+
     function connectWebSocket() {
+        const isRetry = reconnectTimer !== null;
+        cancelReconnect();
         if (state.stomp) state.stomp.disconnect();
         state.subscriptions.clear();
         const client = createStompClient();
         state.stomp = client;
         client.connect(() => {
+            cancelReconnect();
             client.subscribe(DEST.USERS, () => {});
             client.subscribe(DEST.ERROR_BOX, (err) => {
                 if (err && err.message) toast(err.message);
             });
             if (state.user) {
                 client.send(DEST.JOIN, { username: state.user.username });
+                subscribeNotifications();
             }
             (state.conversations || []).forEach((conv) => subscribeConversation(conv.id));
-        }, () => {
-            // Stop reconnecting once the user has logged out; the server now
-            // refuses subscriptions from anonymous connections anyway.
-            if (!state.user) return;
-            setTimeout(connectWebSocket, 4000);
-        });
+            if (isRetry) catchUpAfterReconnect();
+        }, scheduleReconnect);
+    }
+
+    /**
+     * Reload what the closed socket could not deliver. Frames sent while
+     * offline are gone for good (the server does not replay topics), so the
+     * REST reads are the recovery path: unread counts, pending requests and
+     * the open conversation's history all come back correct.
+     */
+    async function catchUpAfterReconnect() {
+        try {
+            await Promise.all([loadConversations(), loadFriends()]);
+            if (state.currentConversation) {
+                await openConversation(state.currentConversation.id);
+            }
+        } catch (err) {
+            // Nothing to show; the next successful reconnect retries the reads.
+        }
     }
 
     function setupAuth() {
@@ -1777,6 +2023,7 @@
             else toast('Private conversation');
         });
         $('new-chat-btn').addEventListener('click', openNewPrivateModal);
+        $('notifications-btn').addEventListener('click', openNotificationsModal);
         $('chat-call-btn').addEventListener('click', () => toast('Voice calls are coming soon'));
         $('chat-search-btn').addEventListener('click', toggleChatSearch);
         $('chat-search-close').addEventListener('click', closeChatSearch);
@@ -2062,7 +2309,7 @@
             state.pendingAttachment = null;
             renderPendingAttachment();
             try {
-                if (state.stomp && !attachment) {
+                if (state.stomp && state.stomp.isConnected() && !attachment) {
                     state.stomp.send('/app/conversations/' + conv.id + '/send', payload);
                 } else {
                     await withBusy($('message-send-btn'), async () => {
@@ -2092,15 +2339,23 @@
         $('save-prefs-btn').addEventListener('click', async () => {
             try {
                 await withBusy($('save-prefs-btn'), async () => {
-                    await request('/settings', {
+                    // Every field must be sent: the server writes the whole
+                    // settings row, so an omitted switch would be saved as off.
+                    const payload = {
+                        theme: state.theme,
+                        notificationsEnabled: $('pref-notifications').checked,
+                        soundEnabled: $('pref-sound').checked,
+                        onlineVisibility: $('pref-online').checked,
+                        notifyMessages: $('pref-notify-messages').checked,
+                        notifyMentions: $('pref-notify-mentions').checked,
+                        notifyFriendRequests: $('pref-notify-friend-requests').checked,
+                        notifyGroupActivity: $('pref-notify-group-activity').checked
+                    };
+                    const saved = await request('/settings', {
                         method: 'PUT',
-                        body: JSON.stringify({
-                            theme: state.theme,
-                            notificationsEnabled: $('pref-notifications').checked,
-                            soundEnabled: $('pref-sound').checked,
-                            onlineVisibility: $('pref-online').checked
-                        })
+                        body: JSON.stringify(payload)
                     });
+                    state.soundEnabled = saved ? saved.soundEnabled : payload.soundEnabled;
                     toast('Preferences saved');
                 });
             } catch (err) {
@@ -2164,7 +2419,11 @@
         $('logout-btn').addEventListener('click', async () => {
             try { await request('/auth/logout', { method: 'POST', body: '{}' }); } catch (e) {}
             if (state.stomp) state.stomp.disconnect();
+            cancelReconnect();
             state.user = null;
+            state.notifications = [];
+            state.unreadNotifications = 0;
+            renderNotificationBadge();
             showAuth('login');
         });
     }

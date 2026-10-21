@@ -22,6 +22,7 @@ import java.util.UUID;
  *
  * /topic/users             UserPresenceResponse  user list and join/leave events
  * /topic/conversations/{id}          PersistentMessageResponse  conversation fan-out
+ * /topic/notifications/{userId}      NotificationDto      live notifications, one user
  * /user/queue/errors       ErrorResponse         failures, one connection
  * </pre>
  *
@@ -40,9 +41,21 @@ public class MessageRouter {
     public static final String TOPIC_USERS = "/topic/users";
     public static final String QUEUE_ERRORS = "/queue/errors";
     public static final String TOPIC_CONVERSATIONS = "/topic/conversations";
+    public static final String TOPIC_NOTIFICATIONS = "/topic/notifications";
 
     public static String conversationTopic(UUID conversationId) {
         return TOPIC_CONVERSATIONS + "/" + conversationId;
+    }
+
+    /**
+     * The one topic a user's own live notifications arrive on. It is a topic
+     * rather than {@code /user/queue/...} so {@code DistributedMessageRelay}
+     * can carry it between backend instances; ownership is enforced by
+     * {@code StompSubscriptionGuard}, which only lets the matching session
+     * subscribe.
+     */
+    public static String notificationTopic(UUID userId) {
+        return TOPIC_NOTIFICATIONS + "/" + userId;
     }
 
     private final SimpMessagingTemplate messaging;

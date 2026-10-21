@@ -166,6 +166,10 @@
                 <button class="tab" type="button" data-filter="private">Private</button>
                 <button class="tab" type="button" data-filter="groups">Groups</button>
             </div>
+            <button id="notifications-btn" class="icon-btn list-col__add" type="button" aria-label="Notifications" title="Notifications">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+                <em id="notifications-badge" class="badge badge--overlay" hidden>0</em>
+            </button>
             <button id="new-chat-btn" class="icon-btn list-col__add" type="button" aria-label="New chat" title="New chat">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
             </button>
@@ -432,20 +436,28 @@
                         </div>
                     </div>
                     <label class="pref">
-                        <span>New messages</span>
+                        <span>Notifications</span>
                         <span class="switch"><input id="pref-notifications" type="checkbox"><span class="slider"></span></span>
+                    </label>
+                    <label class="pref">
+                        <span>New messages</span>
+                        <span class="switch"><input id="pref-notify-messages" type="checkbox" checked><span class="slider"></span></span>
+                    </label>
+                    <label class="pref">
+                        <span>Mentions and replies</span>
+                        <span class="switch"><input id="pref-notify-mentions" type="checkbox" checked><span class="slider"></span></span>
+                    </label>
+                    <label class="pref">
+                        <span>Friend requests</span>
+                        <span class="switch"><input id="pref-notify-friend-requests" type="checkbox" checked><span class="slider"></span></span>
+                    </label>
+                    <label class="pref">
+                        <span>Group activity</span>
+                        <span class="switch"><input id="pref-notify-group-activity" type="checkbox" checked><span class="slider"></span></span>
                     </label>
                     <label class="pref">
                         <span>Sound notifications</span>
                         <span class="switch"><input id="pref-sound" type="checkbox"><span class="slider"></span></span>
-                    </label>
-                    <label class="pref">
-                        <span>Friend requests</span>
-                        <span class="switch"><input id="pref-friend-requests" type="checkbox" checked><span class="slider"></span></span>
-                    </label>
-                    <label class="pref">
-                        <span>Group mentions</span>
-                        <span class="switch"><input id="pref-group-mentions" type="checkbox" checked><span class="slider"></span></span>
                     </label>
                     <label class="pref">
                         <span>Show online status</span>

@@ -24,15 +24,18 @@ public class FriendService {
     private final FriendRequestRepository friendRequestRepository;
     private final UserRepository userRepository;
     private final PresenceService presenceService;
+    private final NotificationService notificationService;
 
     public FriendService(FriendshipRepository friendshipRepository,
                          FriendRequestRepository friendRequestRepository,
                          UserRepository userRepository,
-                         PresenceService presenceService) {
+                         PresenceService presenceService,
+                         NotificationService notificationService) {
         this.friendshipRepository = friendshipRepository;
         this.friendRequestRepository = friendRequestRepository;
         this.userRepository = userRepository;
         this.presenceService = presenceService;
+        this.notificationService = notificationService;
     }
 
     @Transactional
@@ -83,6 +86,9 @@ public class FriendService {
         UserEntity sender = userRepository.findById(senderId)
             .orElseThrow(() -> new ChatException(ChatException.USER_NOT_FOUND, "Sender user not found"));
 
+        notificationService.notifyFriendRequest(sender.getId(), sender.getUsername(),
+            receiver.getId(), friendRequest.getMessage());
+
         return mapToRequestResponse(friendRequest, sender, receiver);
     }
 
@@ -112,6 +118,11 @@ public class FriendService {
 
         UserEntity sender = userRepository.findById(request.getSenderId()).orElse(null);
         UserEntity receiver = userRepository.findById(request.getReceiverId()).orElse(null);
+
+        if (receiver != null) {
+            notificationService.notifyFriendRequestAccepted(receiver.getId(), receiver.getUsername(),
+                request.getSenderId());
+        }
 
         return mapToRequestResponse(request, sender, receiver);
     }

@@ -20,17 +20,20 @@ public class GroupInvitationService {
     private final ConversationMemberRepository memberRepository;
     private final UserRepository userRepository;
     private final GroupBlockRepository groupBlockRepository;
+    private final NotificationService notificationService;
 
     public GroupInvitationService(GroupInvitationRepository groupInvitationRepository,
                                     ConversationRepository conversationRepository,
                                     ConversationMemberRepository memberRepository,
                                     UserRepository userRepository,
-                                    GroupBlockRepository groupBlockRepository) {
+                                    GroupBlockRepository groupBlockRepository,
+                                    NotificationService notificationService) {
         this.groupInvitationRepository = groupInvitationRepository;
         this.conversationRepository = conversationRepository;
         this.memberRepository = memberRepository;
         this.userRepository = userRepository;
         this.groupBlockRepository = groupBlockRepository;
+        this.notificationService = notificationService;
     }
 
     @Transactional
@@ -77,6 +80,11 @@ public class GroupInvitationService {
 
             UserEntity inviter = userRepository.findById(inviterId).orElse(null);
             UserEntity invitedUser = userRepository.findById(userId).orElse(null);
+
+            if (inviter != null) {
+                notificationService.notifyGroupInvitation(inviter.getId(), inviter.getUsername(),
+                    userId, group.getId(), group.getTitle());
+            }
 
             responses.add(mapToInvitationResponse(invitation, group, inviter, invitedUser));
         }

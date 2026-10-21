@@ -42,6 +42,7 @@ public class PersistentMessageService {
     private final ObjectProvider<DistributedMessageRelay> relayProvider;
     private final RateLimiter rateLimiter;
     private final UploadService uploadService;
+    private final NotificationService notificationService;
 
     public PersistentMessageService(MessageRepository messageRepository,
                                   ConversationRepository conversationRepository,
@@ -50,7 +51,8 @@ public class PersistentMessageService {
                                   SimpMessagingTemplate messagingTemplate,
                                   ObjectProvider<DistributedMessageRelay> relayProvider,
                                   RateLimiter rateLimiter,
-                                  UploadService uploadService) {
+                                  UploadService uploadService,
+                                  NotificationService notificationService) {
         this.messageRepository = messageRepository;
         this.conversationRepository = conversationRepository;
         this.memberRepository = memberRepository;
@@ -59,6 +61,7 @@ public class PersistentMessageService {
         this.relayProvider = relayProvider;
         this.rateLimiter = rateLimiter;
         this.uploadService = uploadService;
+        this.notificationService = notificationService;
     }
 
     @Transactional
@@ -192,6 +195,8 @@ public class PersistentMessageService {
 
         PersistentMessageResponse response = enrich(message);
         broadcastConversationEvent(conversationId, "NEW_MESSAGE", response);
+        notificationService.notifyNewMessage(conversationId, senderId, senderUsername,
+            message.getId(), message.getContent(), replyToId);
         return response;
     }
 

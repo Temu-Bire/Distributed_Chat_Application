@@ -31,6 +31,7 @@ public class ConversationService {
     private final GroupJoinRequestRepository groupJoinRequestRepository;
     private final GroupInvitationRepository groupInvitationRepository;
     private final PresenceService presenceService;
+    private final NotificationService notificationService;
     private final TransactionTemplate transactionTemplate;
     private final Object[] pairLocks;
 
@@ -42,6 +43,7 @@ public class ConversationService {
                                GroupJoinRequestRepository groupJoinRequestRepository,
                                GroupInvitationRepository groupInvitationRepository,
                                PresenceService presenceService,
+                               NotificationService notificationService,
                                PlatformTransactionManager transactionManager) {
         this.conversationRepository = conversationRepository;
         this.memberRepository = memberRepository;
@@ -51,6 +53,7 @@ public class ConversationService {
         this.groupJoinRequestRepository = groupJoinRequestRepository;
         this.groupInvitationRepository = groupInvitationRepository;
         this.presenceService = presenceService;
+        this.notificationService = notificationService;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.pairLocks = new Object[PAIR_LOCK_STRIPES];
         for (int i = 0; i < PAIR_LOCK_STRIPES; i++) {
@@ -227,6 +230,14 @@ public class ConversationService {
 
         ConversationMemberEntity newMember = new ConversationMemberEntity(conversationId, request.userId(), MemberRole.MEMBER);
         memberRepository.save(newMember);
+
+        // Being added is invisible until somebody tells you: the new member
+        // gets the same group-invitation notification an invite produces.
+        UserEntity admin = userRepository.findById(currentUserId).orElse(null);
+        if (admin != null) {
+            notificationService.notifyGroupInvitation(admin.getId(), admin.getUsername(),
+                request.userId(), conv.getId(), conv.getTitle());
+        }
     }
 
     @Transactional
