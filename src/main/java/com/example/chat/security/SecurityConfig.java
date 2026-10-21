@@ -55,7 +55,6 @@ public class SecurityConfig {
                     "/app",
                     "/css/**",
                     "/js/**",
-                    "/images/**",
                     "/uploads/**",
                     "/favicon.ico",
                     "/api/health",

@@ -1,4 +1,4 @@
-# Architecture — Distributed Chat (MVP 1)
+# Architecture — Distributed Chat
 
 Status of this document: **current behaviour is authoritative**, and every
 section about the future is explicitly marked *planned*. Nothing described as
@@ -10,10 +10,20 @@ planned exists in the code today.
 
 A single Spring Boot process that:
 
-- serves the chat page and its static assets,
-- accepts STOMP-over-WebSocket connections at `/ws`,
-- persists users, friendships, conversations and messages in an embedded H2
-  file database (PostgreSQL mode) with Flyway migrations,
+- serves a landing page (`/` → `landing.html`), the chat client (`/app` →
+  `index.html`) and its static assets,
+- authenticates users with email + password (BCrypt), keeps the identity in a
+  server-side Spring Security session, and reuses that session principal for the
+  WebSocket handshake,
+- exposes a REST API (`/api/**`) for auth, users, friends, groups, conversations,
+  messages, settings and file uploads,
+- accepts STOMP-over-WebSocket connections at `/ws`, authorising every
+  conversation subscription by membership,
+- persists users, friendships, conversations, messages, reactions and group
+  state in an embedded H2 file database (PostgreSQL mode) with Flyway as the sole
+  schema owner (`ddl-auto: validate`),
+- applies fixed-window rate limits to login, registration, friend requests and
+  message sends (429 + `Retry-After`),
 - holds live presence in memory by default, with a Redis-backed distributed
   mode (`chat.distributed.enabled`) for multi-instance deployments.
 
@@ -33,7 +43,7 @@ flowchart TB
         subgraph Adapter["Transport adapters — no business logic"]
             WS["websocket/ChatWebSocketController<br/>@MessageMapping /app/chat.*"]
             LEAVE["websocket/WebSocketEventListener<br/>SessionDisconnectEvent"]
-            REST["api/HealthController<br/>GET /api/health"]
+            REST["api/ controllers<br/>auth, users, friends, groups, conversations, messages, health"]
             ADVICE["exception/GlobalExceptionHandler<br/>errors → /user/queue/errors"]
         end
 
@@ -59,7 +69,8 @@ flowchart TB
     end
 
     UI -->|WebSocket /ws| WS
-    UI -->|GET /api/health| REST
+    UI -->|HTTPS-style REST /api/**| REST
+    SEC["security/ SecurityConfig + RateLimitFilter<br/>session auth, CSP, 429 budgets"] --> REST
     WS --> CS
     LEAVE --> CS
     CS --> PS
@@ -118,7 +129,7 @@ nothing about HTTP or WebSocket headers.
 | Broker prefixes | `/topic` (topics), `/queue` (point-to-point) |
 | User prefix | `/user` |
 | Heartbeats | 10 s out / 10 s in, one daemon scheduler thread |
-| Allowed origins | `chat.allowed-origins`, default `http://localhost:8080` and `http://127.0.0.1:8080` — never `*` |
+| Allowed origins | `chat.allowed-origins`, default `http://localhost:*` and `http://127.0.0.1:*` (plus dev ports 3000/5173) — never `*` |
 
 ### Client → server (STOMP `SEND`)
 
@@ -207,11 +218,13 @@ Configured limits:
 A slow client cannot stall the others: it exceeds the time or buffer limit and
 is disconnected rather than allowed to hold an outbound thread.
 
-### 5.3 Multi-instance — **no, not today**
+### 5.3 Multi-instance — **partially**
 
-All state lives in one JVM. Running a second copy would create two brokers and
-two presence stores, and users on one instance would never see users on the
-other. See §7.
+Conversations, friends and history survive in the shared database across
+instances, and `chat.distributed.enabled=true` moves *presence* to Redis. What
+does **not** cross instances today: the in-process STOMP broker (a user
+connected to instance B receives no live frames published from instance A),
+the rate-limit counters and the DM pair locks (both per-JVM). See §7.
 
 ### 5.4 Why the rules are safe
 
@@ -242,6 +255,26 @@ What is **not** claimed: message ordering across the pool is not guaranteed
 per session, and the design does not depend on it. Nothing in the rules
 requires "message 2 must be processed strictly after message 1".
 
+### 5.5 Database-level concurrency — **yes, tested**
+
+Presence is not the only shared state any more: friendships, group membership
+and messages are written concurrently, and the check-then-write races against
+the unique constraints are closed deliberately:
+
+| Race | Defence |
+|---|---|
+| Duplicate idempotent send (same `clientMessageId` twice concurrently) | `SELECT … FOR UPDATE` on the conversation row before the clientId pre-check + `uq_msg_client_id` |
+| Two admins adding the same member / join-request accepted while being added | Conversation-row or request-row pessimistic lock + `uq_conv_member`, insert guarded by existence check |
+| Double-accept of a join request or group invitation | Lock the request/invitation row first; losers read status ACCEPTED and get `INVALID_COMMAND`; fixed lock order (request → group) prevents deadlock |
+| Reaction toggle race | `SELECT … FOR UPDATE` on the message row + `uq_message_reaction` |
+| Simultaneous DM creation in both directions | JVM striped locks (64 stripes, sorted pair hash) around a committed transaction + unique conversation key |
+| Cross-node correctness | Every above defence is single-node; multi-instance needs DB-level arbitration (already provided by the unique constraints — the loser currently surfaces as 409/500) |
+
+Broadcasts are published only **after** the DB transaction commits
+(`TransactionSynchronizationManager` after-commit hook), so a client can never
+see a message the database rejected. `ConcurrencyRaceTest` releases latched
+thread pools against each scenario and asserts the surviving row count.
+
 ---
 
 ## 6. Security — what the code does, and what it does not
@@ -250,14 +283,22 @@ requires "message 2 must be processed strictly after message 1".
 
 | Requirement | How |
 |---|---|
-| Server-side validation | Bean Validation on DTOs **and** re-checks in the application services (defence in depth, so a future adapter that skips validation cannot bypass the rules) |
+| Password storage | BCrypt (`spring-security-crypto`) — never plaintext, never reversible |
+| Sessions | Server-side Spring Security session; `changeSessionId()` on login (session-fixation defence); cookie is HttpOnly, SameSite=Lax, `Secure` behind `COOKIE_SECURE` |
+| Backend authorization | Every REST controller resolves the user from the session principal, never from the request body; services re-check membership/role before reads and writes (IDOR and privilege-escalation paths are covered by `WebSocketSecurityIntegrationTest` and the controller integration tests) |
+| WebSocket subscription auth | `/topic/conversations/{id}` subscriptions are intercepted and checked against the member table; anonymous or non-member subscriptions are refused (403) |
+| Sender cannot be spoofed | `senderId` comes from the connection's `Principal`, never from the payload |
+| Rate limiting | Fixed-window limiter (`security/RateLimitFilter` + `RateLimiter`): login and register per IP, friend requests per user, message sends per sender inside `PersistentMessageService` (one choke point for REST **and** STOMP). Refusals return 429 + `Retry-After`; retries of already-persisted sends never consume budget |
+| Response headers | Strict CSP with no `unsafe-*` (verified against the client's actual needs), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin` |
+| SQL injection | Spring Data JPA parameter binding throughout; no string-built SQL |
+| XSS | Output: `app.js` renders user content with `textContent` only (a contract test fails the build if an HTML sink appears). Input: length and control-character validation; CSP as second layer |
+| CSRF | Spring's CSRF filter is disabled because the API is cookie-session based; the mitigation is SameSite=Lax (cross-site POSTs arrive without the session cookie). A same-origin deployment (`/app` and `/api` share one origin) keeps `fetch` unauthenticated-token-free. See limitations |
+| Input validation | Bean Validation on DTOs **and** re-checks in the application services (defence in depth, so a future adapter that skips validation cannot bypass the rules) |
 | Message length limit | 2000 chars, enforced in both places, asserted by tests |
-| Restricted origins | Explicit allow-list; never `*` |
-| Sender cannot be spoofed | `sender` comes from the connection's `Principal`, never from the payload |
+| Restricted origins | Explicit allow-list (`chat.allowed-origins`); never `*` — for both the WebSocket handshake and HTTP CORS |
 | Direct chats stay direct | A direct conversation only fans out to `/topic/conversations/{id}` of its two members; membership is checked server-side |
-| Private content is not logged | Only lifecycle events are logged (`User 'alice' joined`) |
-| Errors are not broadcast | Every error goes to the originating connection's `/user/queue/errors` |
-| User content is not markup | `app.js` renders with `textContent`; a test fails the build if an HTML sink appears |
+| Private content is not logged | Only lifecycle events are logged; no message bodies, no password hashes, no tokens |
+| Error contract | One `ErrorResponse{code,message}` shape per transport; HTTP statuses mapped by concept (401/403/404/409/429/400), internals never leaked |
 
 Origin checking deserves a precise note. Spring's `OriginHandshakeInterceptor`
 allows a request when either (a) the `Origin` header matches the request's own
@@ -276,33 +317,27 @@ So the endpoint cannot be opened from an arbitrary third-party site, while a
 page served from the same host:port always works — including when the port is
 changed, which needs no configuration change.
 
-### Demo-grade, deliberately
+### Known limitations (audited, deliberately un-fixed)
 
-**Joining requires only a username.** There is no password, no token, and no
-proof of identity. Anyone who knows another user's name cannot impersonate them
-*within* a session, because the name is bound to the connection — but anyone can
-*claim* an unused name by joining first. That makes this suitable for a
-demonstration of protocol, concurrency and layering, and **unsuitable for
-anything real**.
-
-The `AnonymousHandshakeHandler` assigns `anon-<uuid>` as the connection's
-`Principal`. It already prefers a real authenticated principal if one exists,
-which is the seam where authentication plugs in later without touching the
-chat rules.
-
-### Not implemented, and planned
-
-- **Transport security (TLS).** Nothing is encrypted in transit. Terminate TLS
-  in front of the process, or enable Tomcat's HTTPS connector.
-- **Rate limiting.** Nothing prevents a client from flooding the server with
-  frames. Planned: a per-session token bucket on the inbound channel, counting
-  frames and bytes before dispatch.
-- **Real authentication/authorization.** Username+password or SSO; a signed
-  token carried at handshake time; authority mapping for administrative
-  actions.
-- **Data retention / privacy policy.** Messages are not stored, so there is
-  nothing to retain today; once they are stored (§7.5) retention rules become
-  necessary.
+- **CSRF relies on SameSite, not a token.** A browser that ignores SameSite
+  (very old ones) could forge a cross-site POST. Acceptable for this deployment
+  model; enabling Spring's CSRF support would require surfacing the token to
+  the SPA.
+- **Presence join names are self-declared.** `/app/chat.join` still accepts a
+  username in the payload. The authenticated principal gates the WebSocket
+  session, but the presence display name is not yet bound to it.
+- **Rate limits are per-node.** The fixed-window counters live in this JVM's
+  memory. Multi-instance deployments need a shared counter (Redis `INCR` +
+  `EXPIRE`) — same upgrade path as presence (§7.3).
+- **Idempotent DM-pair creation is per-node.** `getOrCreateDirect` uses JVM
+  striped locks plus a DB unique constraint; correctness holds within one
+  instance and degrades to a caught constraint violation across instances.
+- **Mutual simultaneous friend requests** (A→B and B→A in the same instant,
+  neither pending yet) can surface a 500 from the `uq_friendship` constraint.
+  State stays consistent and a retry reports ALREADY_FRIENDS, but the mapping
+  is imperfect.
+- **Transport security (TLS) is external.** Run behind a TLS-terminating proxy
+  or enable Tomcat's HTTPS connector, and set `COOKIE_SECURE=true`.
 
 ---
 
@@ -366,30 +401,30 @@ Consistency points to settle before this is attempted:
 
 | Now | Planned |
 |---|---|
-| No persistence: history exists only in a connected browser tab | Durable message log; STOMP `ACK` frames so delivery is confirmed per message |
-| A disconnected user loses everything sent while away | Offline inbox / per-user queue, drained on reconnect |
-| No `messageId` deduplication on the client | Client and store both dedupe on `messageId` |
-| | Explicit `NACK` + redelivery policy for failed sends |
+| Messages are persisted before broadcast; events are published only after commit | STOMP `ACK` frames so delivery is confirmed per message |
+| Sends are idempotent on `clientMessageId` — a retry never duplicates a row | Explicit `NACK` + redelivery policy for failed sends |
+| The client refetches history on reconnect, so frames missed while offline are recovered from the DB | Offline inbox / per-user queue, drained on reconnect, instead of a full refetch |
+| Client dedupes by message id when an event races the REST response | |
 
 Message IDs are already server-generated and unique, which is the precondition
-for idempotent writes — that part of the groundwork exists.
+for idempotent writes.
 
 ### 7.5 Persistent storage
 
 | Now | Planned |
 |---|---|
-| Nothing stored; restart clears everything | Relational store (e.g. PostgreSQL): `users`, `messages`, `sessions` |
-| | Message history endpoint (`GET /api/history?since=`) behind authentication |
-| | Write path must be idempotent on `messageId` so a redelivery does not duplicate a row |
+| Relational store: embedded H2 in PostgreSQL mode, Flyway V1–V4 as sole schema owner, `ddl-auto: validate` (any entity/migration drift fails boot) | Managed PostgreSQL for real deployments |
+| `GET /api/conversations/{id}/messages` history behind session auth | Retention and privacy policy for stored content |
+| Write path idempotent on `clientMessageId` | Online schema migrations with expansion/contraction phases |
 
 ### 7.6 Authentication and authorization
 
 | Now | Planned |
 |---|---|
-| Username-only join (demo-grade) | Credentials or SSO; a verified `Principal` established at handshake time |
-| | `AnonymousHandshakeHandler` already prefers a real principal — the seam exists |
-| | Authorization: who may broadcast, who may read history, rate limits per identity |
-| | Rate limiting and payload quotas per identity, not just per connection |
+| Email + BCrypt password → server-side session; the WebSocket handshake reuses the same session principal | SSO / signed token carried at handshake time for stateless scale-out |
+| The handshake prefers a real authenticated principal (`AnonymousHandshakeHandler` seam, now exercised) | Authority mapping for administrative actions beyond owner/admin/moderator |
+| Conversation subscriptions authorized by membership; REST handlers check membership/role per call | |
+| Rate limits per identity for messages and friend requests, per IP for auth endpoints | Shared (Redis) counters so limits hold across instances |
 
 ### 7.7 Monitoring and health
 
@@ -404,11 +439,11 @@ for idempotent writes — that part of the groundwork exists.
 
 ### 7.8 Horizontal scaling — the order to do it in
 
-1. TLS and real authentication (before exposing anything publicly).
+1. TLS termination (and `COOKIE_SECURE=true`); optionally a CSRF token for the SPA.
 2. External broker (`enableStompBrokerRelay`) — this unblocks scaling.
-3. Shared presence with TTL-based expiry.
+3. Shared presence with TTL-based expiry (`chat.distributed.enabled` is the first step).
 4. Load balancer; verify WebSocket upgrades pass through.
-5. Persistence with idempotent writes.
+5. Shared rate-limit counters; let DB unique constraints arbitrate cross-node races with clean 409s.
 6. Metrics and alerting.
 
 Doing 4 before 2 produces a cluster that appears to work and silently loses
@@ -434,6 +469,12 @@ messages.
 | 12 | Session-based Spring Security for the REST API | Cookie sessions with BCrypt-hashed passwords; the WebSocket handshake reuses the same session principal |
 | 13 | Hand-rolled minimal STOMP client in `app.js` | The demo works offline and needs no build step or third-party JS |
 | 14 | `textContent` only, enforced by a test | Prevents a message body from becoming markup in a reader's browser |
+| 15 | Pessimistic row locks behind every check-then-write, with unique constraints as the final arbiter | Closes duplicate-member/double-accept/reaction races; proven by latched-thread tests |
+| 16 | Conversation events published only after the DB commit | A client can never see a message the database rejected ("persist before confirming") |
+| 17 | Fixed-window rate limiter, per sender inside `PersistentMessageService` | One choke point covers REST and STOMP sends; retries of persisted sends never consume budget |
+| 18 | Strict CSP with no `unsafe-*` | Compatible with the textContent-only client by construction; blocks injected script even if XSS slipped through |
+| 19 | Flyway as sole schema owner, `ddl-auto: validate` | Entity/migration drift fails boot loudly instead of silently diverging |
+| 20 | `changeSessionId()` on login | Session-fixation defence without a second cookie |
 
 ---
 
@@ -442,12 +483,22 @@ messages.
 | Level | Covers |
 |---|---|
 | Unit (`ChatServiceTest`) | Presence rules: join validation, duplicate names, rejoin, leave cleanup, error codes |
-| Concurrency (`DistributedConcurrencyTest`) | Racing threads claiming a name, including mixed case |
+| Unit (`AuthServiceTest`, `FriendServiceTest`, `ConversationServiceTest`, `PersistentMessageServiceTest`, `GroupModerationTest`, `ConversationOwnershipTransferTest`) | Application rules: credentials, friendship state machine, membership/roles, idempotent sends, reactions, blocking, ownership transfer |
+| Unit (`RateLimiterTest`) | Fixed-window budgets, rollover, `Retry-After`, key isolation, disabled-mode, and a 16-thread test proving concurrent traffic shares one budget atomically |
+| Concurrency (`DistributedConcurrencyTest`) | Racing threads claiming a presence name, including mixed case |
+| Concurrency (`ConcurrencyRaceTest`) | Latched thread pools against each check-then-write race in §5.5 — idempotent sends, competing joins, double-accepts, reaction toggles, DM creation — asserting the surviving row counts |
 | Unit (`InMemoryPresenceStoreTest`) | The port's contract: atomicity, lookup, removal |
-| Contract (`FrontendContractTest`) | `app.js` destinations match `MessageRouter`; no HTML sink in the page script |
+| Contract (`FrontendContractTest`) | `app.js` destinations match `MessageRouter`; no HTML sink; page stays zoomable; loading vs empty states exist |
 | Integration (`ChatWebSocketIntegrationTest`) | Real sockets, 2–3 simultaneous clients: presence fan-out, duplicate-name refusal, oversized input, disconnect |
+| Integration (`WebSocketSecurityIntegrationTest`) | Unauthorized connections and non-member subscriptions refused; delivery only to authorized recipients |
+| Integration (`RateLimitIntegrationTest`) | Real HTTP: 429 + `RATE_LIMITED` + `Retry-After` on exhausted login/friend/message budgets; reads unaffected |
+| Integration (`SessionHardeningIntegrationTest`) | Cookie HttpOnly/SameSite, session id rotation on login, CSP/X-Frame-Options/nosniff headers present |
 | Integration (`HealthEndpointIntegrationTest`, `FriendControllerIntegrationTest`, `FullE2EChatJourneyTest`) | The REST surface: health, friend requests, register → friend → chat journey |
+| Integration (`LandingPageIntegrationTest`) | `/` serves the landing page, `/app` serves the client, every marketing button resolves to a real route, claimed security features are actually enforced |
 
 `ChatWebSocketIntegrationTest` asserts negatively as well as positively: a
 refused duplicate join must publish **no** presence frame — a test that would
 pass trivially if refusals were indistinguishable from successful joins.
+
+Run everything with `./mvnw.cmd test` (114 tests, all against a throwaway
+in-memory database; no external services required).

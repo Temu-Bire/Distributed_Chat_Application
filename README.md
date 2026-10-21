@@ -35,7 +35,9 @@ The application evolved from an initial single-process Java TCP socket and Swing
 - **Responsive Layout:** Side-by-side desktop view and mobile bottom-tab navigation.
 - **Message Bubbles:** Incoming (left, gray) vs. outgoing (right, blue, double checkmarks `✓✓`).
 - **Real-Time Elements:** Live user search, online indicators, typing character counter, emoji picker, and toast alerts.
-- **Security-First:** 100% safe DOM rendering using `textContent` (zero `innerHTML` sinks, verified by automated tests).
+- **Loading & Empty States:** Conversation list and message thread distinguish "still loading" from "genuinely empty"; submit buttons show busy feedback.
+- **Landing Page:** `/` serves a responsive marketing page whose Log in / Get started buttons route into the real client at `/app`.
+- **Security-First:** 100% safe DOM rendering using `textContent` (zero `innerHTML` sinks, verified by automated tests), strict CSP with no `unsafe-*`, HttpOnly/SameSite session cookies with rotation on login, and 429 rate limits on login, registration, friend requests, and message sends.
 
 ### 🔐 User Accounts & Authentication
 - **User Registration:** Display name, unique username, unique email, and password.
@@ -127,12 +129,13 @@ Run the application immediately with zero external dependencies. Uses an embedde
 .\mvnw.cmd spring-boot:run
 ```
 
-Once you see `Started ChatApplication`, open **<http://localhost:8080>** in your browser.
+Once you see `Started ChatApplication`, open **<http://localhost:8081>** — the ChatSphere landing page. The chat client lives at **<http://localhost:8081/app>** (login/register are also reachable from the landing page buttons).
 
-> **Port Conflict:** If port 8080 is occupied, run on another port:
+> **Port Conflict:** If port 8081 is occupied, run on another port:
 > ```powershell
 > .\mvnw.cmd spring-boot:run "-Dspring-boot.run.arguments=--server.port=8090"
 > ```
+> No other change is needed: the default WebSocket/CORS origin patterns cover any `localhost` port.
 
 ---
 
@@ -172,20 +175,27 @@ Run all automated tests with Maven:
 
 | Test Class | Tests | What is Tested |
 |---|---|---|
-| **`AuthServiceTest`** | 8 | User registration, password encryption, duplicate username rejection (case-insensitive), duplicate email rejection, login, profile updates, password change, user search (excludes current user, sorted) |
+| **`AuthServiceTest`** | 8 | User registration, BCrypt password hashing, duplicate username/email rejection, login, profile updates, password change, user search |
 | **`ChatServiceTest`** | 14 | STOMP join rules: registration, whitespace trimming, blank/long/control-character names, duplicate names, rejoin; leave: presence broadcast, name reuse, idempotency |
+| **`ConcurrencyRaceTest`** | 6 | Latched thread pools racing each check-then-write path: idempotent duplicate sends, competing group joins, join-request vs admin add, simultaneous DM creation both directions, reaction toggle races, double-accept of a join request |
 | **`ConversationOwnershipTransferTest`** | 2 | Group ownership transfer rules |
 | **`ConversationServiceTest`** | 8 | Direct conversation creation, idempotency, self-chat prevention, group creation with owner role, member additions and removals, RBAC permissions, voluntary leave, archiving |
 | **`DistributedConcurrencyTest`** | 1 | Race-condition testing across presence store operations |
-| **`FriendServiceTest`** | 8 | Friend request send/accept/reject/cancel, paired friendship rows, removal, status lookups |
-| **`PersistentMessageServiceTest`** | 7 | Message persistence, conversation summary updates, size validation, non-member rejection, chronological pagination, author edit verification, unauthorized edit rejection, soft-delete filtering |
-| **`FrontendContractTest`** | 2 | Verifies `app.js` pins exactly the server's STOMP destinations (`MessageRouter`) and contains zero `innerHTML` / `outerHTML` sinks |
+| **`FriendServiceTest`** | 9 | Friend request send/accept/reject/cancel, paired friendship rows, removal, status lookups, request messages |
+| **`GroupModerationTest`** | 9 | Privacy settings, moderator role, member blocking/unblocking, join requests and invitations |
+| **`PersistentMessageServiceTest`** | 13 | Message persistence, conversation summaries, size validation, non-member rejection, replies, emoji reactions, idempotent sends, chronological pagination, author edit verification, unauthorized edit rejection, soft-delete filtering |
+| **`FrontendContractTest`** | 3 | `app.js` pins exactly the server's STOMP destinations, zero `innerHTML` sinks, page stays zoomable and shows loading vs empty states |
+| **`LandingPageIntegrationTest`** | 4 | `/` serves the landing page, `/app` serves the client, every button resolves to a real route, marketing security claims match enforcement |
 | **`InMemoryPresenceStoreTest`** | 11 | Presence storage contract, case-insensitivity, thread-safe register/unregister atomicity |
 | **`FriendControllerIntegrationTest`** | 3 | HTTP friend-request flow end to end |
 | **`FullE2EChatJourneyTest`** | 1 | Register → friend → direct chat → message journey over REST |
-| **`HealthEndpointIntegrationTest`** | 2 | HTTP GET `/api/health` integration test verifying health status reporting |
-| **`ChatWebSocketIntegrationTest`** | 4 | Real WebSocket/STOMP frames with 2-3 simultaneous clients: join/leave presence fan-out, duplicate-name refusal, oversized username |
-| **Total** | **71** | **100% Passing (0 failures, 0 errors, 0 skipped)** |
+| **`HealthEndpointIntegrationTest`** | 2 | HTTP GET `/api/health` verifying health status reporting |
+| **`RateLimiterTest`** | 7 | Fixed-window budgets, rollover, `Retry-After`, key isolation, disabled-mode, 16-thread shared-budget atomicity |
+| **`RateLimitIntegrationTest`** | 3 | Real HTTP: 429 + `RATE_LIMITED` + `Retry-After` on exhausted login/friend-request/message budgets; reads unaffected |
+| **`SessionHardeningIntegrationTest`** | 3 | Cookie HttpOnly/SameSite=Lax, session id rotation on login (fixation defence), CSP / X-Frame-Options / nosniff headers |
+| **`ChatWebSocketIntegrationTest`** | 4 | Real WebSocket/STOMP frames with 2–3 simultaneous clients: presence fan-out, duplicate-name refusal, oversized input, disconnect |
+| **`WebSocketSecurityIntegrationTest`** | 3 | Anonymous and non-member subscription refusals; delivery only to authorized recipients |
+| **Total** | **114** | **100% Passing (0 failures, 0 errors, 0 skipped)** |
 
 ### Running Specific Test Classes
 
@@ -209,10 +219,10 @@ Run all automated tests with Maven:
    .\mvnw.cmd spring-boot:run
    ```
 2. **Open Window 1 (Alice):**
-   - Navigate to `http://localhost:8080` and register as `alice` (display name, username, email, password).
+   - Navigate to `http://localhost:8081/app` and register as `alice` (display name, username, email, password).
    - Verify: the ChatSphere shell loads with the dark sidebar rail and the welcome panel.
 3. **Open Window 2 (Bob in Incognito/Second Browser):**
-   - Navigate to `http://localhost:8080` and register as `bob`.
+   - Navigate to `http://localhost:8081/app` and register as `bob`.
 4. **Friends:**
    - As Alice, open **Friends**, search for `bob`, and click **Add Friend**.
    - As Bob, open **Friend Requests**, see the incoming request, and click **Accept**.
@@ -308,9 +318,10 @@ To verify that two users connected to **two different application instances** ca
 | Method | Path | Description | Access |
 |---|---|---|---|
 | `GET` | `/api/conversations/{id}/messages` | Paginate messages (`page`, `size`) | Member |
-| `POST` | `/api/conversations/{id}/messages` | Send message to conversation | Member |
+| `POST` | `/api/conversations/{id}/messages` | Send message; accepts `replyToId` and idempotent `clientMessageId`; rate limited per sender | Member |
 | `PUT` | `/api/messages/{msgId}` | Edit existing message | Author only |
 | `DELETE` | `/api/messages/{msgId}` | Soft delete message | Author / Owner |
+| `POST` | `/api/messages/{msgId}/reactions` | Toggle an emoji reaction | Member |
 
 #### Health (`/api/health`)
 | Method | Path | Description | Access |
@@ -324,9 +335,9 @@ To verify that two users connected to **two different application instances** ca
 | Direction | Destination | Purpose | Payload |
 |---|---|---|---|
 | **Client → Server** | `/app/chat.join` | Join chat and register presence | `{"username": "alice"}` |
-| | `/app/conversations/{id}/send` | Send a message into a persisted conversation | `{"content": "Hello!"}` |
+| | `/app/conversations/{id}/send` | Send a message into a persisted conversation | `{"content": "Hello!", "replyToId": "<uuid|null>", "clientMessageId": "<uuid>"}` — `clientMessageId` makes retries idempotent; the server assigns sender and timestamps |
 | **Server → Client** | `/topic/users` | Presence changes & online list | User list & join/leave event |
-| | `/topic/conversations/{id}` | Persistent conversation events | `NEW_MESSAGE`, `MESSAGE_EDITED`, `MESSAGE_DELETED` |
+| | `/topic/conversations/{id}` | Persistent conversation events | `NEW_MESSAGE`, `MESSAGE_EDITED`, `MESSAGE_DELETED`, `MESSAGE_REACTED` — published only after the DB commit; subscriptions are refused (403) for non-members |
 | | `/user/queue/errors` | Error notifications | `{"code": "...", "message": "..."}` |
 
 ---
@@ -337,14 +348,22 @@ Configure via environment variables or in `src/main/resources/application.yml`:
 
 | Environment Variable | Default Value | Description |
 |---|---|---|
-| `PORT` | `8080` | HTTP and WebSocket server port |
-| `SPRING_DATASOURCE_URL` | `jdbc:postgresql://localhost:5432/chat_db` | PostgreSQL JDBC connection URL |
-| `SPRING_DATASOURCE_USERNAME` | `postgres` | PostgreSQL username |
-| `SPRING_DATASOURCE_PASSWORD` | `postgres` | PostgreSQL password |
-| `SPRING_FLYWAY_ENABLED` | `false` (local) / `true` (prod/test) | Enable Flyway automatic migrations |
+| `PORT` | `8081` | HTTP and WebSocket server port |
+| `SPRING_DATASOURCE_URL` | `jdbc:h2:file:./data/chatsphere` (PostgreSQL mode) | JDBC connection URL; set to `jdbc:postgresql://...` for a managed database |
+| `SPRING_DATASOURCE_USERNAME` | `sa` | Database username |
+| `SPRING_DATASOURCE_PASSWORD` | *(empty)* | Database password |
+| `SPRING_FLYWAY_ENABLED` | `true` | Flyway is the sole schema owner (`ddl-auto: validate` — entity/migration drift fails startup) |
 | `SPRING_REDIS_HOST` | `localhost` | Redis server hostname |
 | `SPRING_REDIS_PORT` | `6379` | Redis server port |
 | `CHAT_DISTRIBUTED_ENABLED` | `false` | Enable Redis cluster presence & Pub/Sub relay |
+| `CHAT_RATE_LIMIT_ENABLED` | `true` | Master switch for the fixed-window rate limiter |
+| `RATE_LIMIT_LOGIN` | `10` | Login attempts per minute per IP |
+| `RATE_LIMIT_REGISTER` | `5` | Registrations per minute per IP |
+| `RATE_LIMIT_FRIEND_REQUESTS` | `20` | Friend requests per minute per user |
+| `RATE_LIMIT_MESSAGES` | `60` | Message sends per minute per sender (covers REST **and** STOMP) |
+| `SESSION_TIMEOUT` | `8h` | Server-side session lifetime |
+| `COOKIE_SECURE` | `false` | Set `true` behind TLS so the session cookie is `Secure` |
+| `UPLOAD_DIR` | `./uploads` | Where avatar uploads are written (served under `/uploads/**`) |
 
 ---
 
@@ -362,23 +381,26 @@ Configure via environment variables or in `src/main/resources/application.yml`:
     │   │   ├── ChatApplication.java    # Application entry point
     │   │   ├── api/                    # REST controllers (Auth, Users, Friends, Convs, Messages, …)
     │   │   ├── application/            # Business services (Auth, Friend, Conv, Message, Presence)
-    │   │   ├── config/                 # Security, WebSocket, Distributed configuration
+    │   │   ├── config/                 # WebSocket, CORS/resource, property configuration
     │   │   ├── domain/                 # Domain entities, enums, and value objects
     │   │   ├── dto/                    # Request/Response data transfer objects
     │   │   ├── exception/              # Global error handling and ChatException
     │   │   ├── infrastructure/         # Repositories, InMemory and Redis Presence Stores
+    │   │   ├── security/               # SecurityConfig (sessions, CSP), RateLimiter + filter
     │   │   └── websocket/              # STOMP controllers and connection event listeners
     │   └── resources/
     │       ├── application.yml         # Application configuration
-    │       ├── db/migration/           # Flyway SQL schema migrations
+    │       ├── db/migration/           # Flyway SQL schema migrations V1–V4 (sole schema owner)
     │       └── static/                 # ChatSphere vanilla web frontend
-    │           ├── index.html          # Chat layout and modals
-    │           ├── css/styles.css      # CSS design tokens, themes, bubbles
+    │           ├── landing.html        # Marketing landing page served at /
+    │           ├── index.html          # Chat layout and modals (served at /app)
+    │           ├── css/                # styles.css (app) and landing.css (landing page)
     │           └── js/app.js           # Frontend controller (100% XSS safe)
     └── test/java/com/example/chat/
         ├── application/                # Service & concurrency race tests
-        ├── frontend/                   # Contract & XSS safety tests
+        ├── frontend/                   # Contract, XSS-safety & landing page tests
         ├── infrastructure/             # Presence store tests
         ├── integration/                # REST integration tests
-        └── websocket/                  # Full-duplex WebSocket STOMP integration tests
+        ├── security/                   # Rate limiter & session hardening tests
+        └── websocket/                  # Full-duplex WebSocket STOMP + authorization tests
 ```
