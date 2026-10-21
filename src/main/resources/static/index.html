@@ -236,6 +236,13 @@
                 </button>
             </header>
             <div id="chat-messages" class="chat-thread" aria-live="polite"></div>
+            <div id="reply-bar" class="reply-bar" hidden>
+                <div class="reply-bar__info">
+                    <strong id="reply-bar-author">Replying</strong>
+                    <span id="reply-bar-preview" class="muted"></span>
+                </div>
+                <button id="reply-cancel-btn" type="button" class="icon-btn" aria-label="Cancel reply">✕</button>
+            </div>
             <form id="message-send-form" class="composer" autocomplete="off">
                 <div class="composer__field">
                     <button id="emoji-btn" type="button" class="icon-btn composer__icon" aria-label="Insert emoji">
@@ -328,14 +335,22 @@
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="M22 6l-10 7L2 6"></path></svg>
                         <span>Invitations</span>
                     </button>
+                    <button class="group-menu__item" type="button" data-gtab="blocked">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line></svg>
+                        <span>Blocked</span>
+                    </button>
                 </nav>
                 <div class="group-panels">
                     <section class="panel-card group-pane" data-gpane="info">
                         <h3>Group information</h3>
                         <label class="field"><span>Group name</span><input id="group-title-input" maxlength="100"></label>
                         <label class="field"><span>Description</span><textarea id="group-desc-input" maxlength="500" rows="3"></textarea></label>
+                        <label class="pref"><span>Private group (join by request only)</span><span class="switch"><input id="group-private-input" type="checkbox"><span class="slider"></span></span></label>
                         <p id="group-created" class="muted">Created recently</p>
-                        <button id="group-save-btn" type="button" class="btn btn-primary btn-sm">Save changes</button>
+                        <div class="row-gap">
+                            <button id="group-save-btn" type="button" class="btn btn-primary btn-sm">Save changes</button>
+                            <button id="group-leave-btn" type="button" class="btn btn-ghost btn-sm">Leave group</button>
+                        </div>
                     </section>
                     <section class="panel-card group-pane" data-gpane="members" hidden>
                         <div class="row-between">
@@ -355,6 +370,12 @@
                             <h3>Pending Invitations</h3>
                         </div>
                         <ul id="pending-group-invitations-list" class="card-list"></ul>
+                    </section>
+                    <section class="panel-card group-pane" data-gpane="blocked" hidden>
+                        <div class="row-between">
+                            <h3>Blocked Users</h3>
+                        </div>
+                        <ul id="group-blocked-list" class="card-list"></ul>
                     </section>
                 </div>
             </div>

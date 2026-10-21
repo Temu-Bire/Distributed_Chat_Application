@@ -12,6 +12,8 @@
         ERROR_BOX: '/user/queue/errors'
     });
 
+    const REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🔥', '🎉', '👀'];
+
     const state = {
         user: null,
         conversations: [],
@@ -29,7 +31,9 @@
         groupJoinRequests: [],
         groupInvitations: [],
         groupMembers: [],
-        directory: []
+        groupBlocked: [],
+        directory: [],
+        replyTo: null
     };
 
     const $ = (id) => document.getElementById(id);
@@ -295,6 +299,9 @@
             const mid = el('div');
             mid.appendChild(el('strong', '', person.displayName || person.senderDisplayName || person.receiverDisplayName || 'User'));
             mid.appendChild(el('span', 'muted', person.username ? '@' + person.username : (person.senderUsername ? '@' + person.senderUsername : '@' + (person.receiverUsername || ''))));
+            if (person.message) {
+                mid.appendChild(el('span', 'request-message', '"' + person.message + '"'));
+            }
             row.appendChild(avatar);
             row.appendChild(mid);
             if (actionFactory) row.appendChild(actionFactory(person));
@@ -354,18 +361,157 @@
         const items = state.messages.get(conv.id) || [];
         items.forEach((msg) => {
             const mine = state.user && msg.senderId === state.user.id;
+            const row = el('div', 'msg-row ' + (mine ? 'msg-row--out' : 'msg-row--in'));
             const bubble = el('div', 'bubble ' + (mine ? 'bubble--out' : 'bubble--in'));
             if (!mine && isGroup(conv)) {
                 bubble.appendChild(el('small', 'bubble__author', msg.senderUsername || 'User'));
+            }
+            if (msg.replyToContent) {
+                bubble.appendChild(el('div', 'bubble__reply', '↳ ' + msg.replyToContent));
             }
             bubble.appendChild(el('div', 'bubble__text', msg.deleted ? 'This message was deleted.' : msg.content));
             const meta = el('div', 'bubble__meta');
             meta.appendChild(el('span', '', formatTime(msg.createdAt) + (msg.edited ? ' · edited' : '')));
             if (mine) meta.appendChild(el('span', 'ticks', '✓✓'));
             bubble.appendChild(meta);
-            thread.appendChild(bubble);
+            const reactions = el('div', 'reactions');
+            (msg.reactions || []).forEach((reaction) => {
+                const chip = el('button', 'reaction', reaction.emoji + ' ' + reaction.count);
+                chip.type = 'button';
+                chip.addEventListener('click', () => sendReaction(msg, reaction.emoji));
+                reactions.appendChild(chip);
+            });
+            if (reactions.firstChild) bubble.appendChild(reactions);
+            row.appendChild(bubble);
+            if (!msg.deleted) {
+                const actions = el('div', 'msg-actions');
+                const reply = el('button', 'msg-action', 'Reply');
+                reply.type = 'button';
+                reply.addEventListener('click', () => beginReply(msg));
+                actions.appendChild(reply);
+                const react = el('button', 'msg-action', '😊 React');
+                react.type = 'button';
+                react.addEventListener('click', () => openReactionPicker(row, msg));
+                actions.appendChild(react);
+                if (mine) {
+                    const edit = el('button', 'msg-action', 'Edit');
+                    edit.type = 'button';
+                    edit.addEventListener('click', () => openEditMessageModal(msg));
+                    actions.appendChild(edit);
+                }
+                if (mine || isAdminConversation(conv)) {
+                    const remove = el('button', 'msg-action msg-action--danger', 'Delete');
+                    remove.type = 'button';
+                    remove.addEventListener('click', () => removeOwnMessage(msg));
+                    actions.appendChild(remove);
+                }
+                row.appendChild(actions);
+            }
+            thread.appendChild(row);
         });
         thread.scrollTop = thread.scrollHeight;
+    }
+
+    function isAdminConversation(conv) {
+        return !!conv && (conv.myRole === 'OWNER' || conv.myRole === 'MODERATOR');
+    }
+
+    function beginReply(msg) {
+        state.replyTo = msg;
+        $('reply-bar-author').textContent = 'Replying to ' + (msg.senderUsername || 'message');
+        $('reply-bar-preview').textContent = msg.deleted ? 'Deleted message' : msg.content;
+        $('reply-bar').hidden = false;
+        $('message-content-input').focus();
+    }
+
+    function clearReply() {
+        state.replyTo = null;
+        $('reply-bar').hidden = true;
+        $('reply-bar-author').textContent = '';
+        $('reply-bar-preview').textContent = '';
+    }
+
+    function openReactionPicker(parent, msg) {
+        const existing = parent.querySelector('.emoji-picker');
+        if (existing) {
+            parent.removeChild(existing);
+            return;
+        }
+        const picker = el('div', 'emoji-picker');
+        REACTION_EMOJIS.forEach((emoji) => {
+            const btn = el('button', 'emoji-picker__item', emoji);
+            btn.type = 'button';
+            btn.addEventListener('click', () => {
+                if (picker.parentNode === parent) parent.removeChild(picker);
+                sendReaction(msg, emoji);
+            });
+            picker.appendChild(btn);
+        });
+        parent.appendChild(picker);
+    }
+
+    async function sendReaction(msg, emoji) {
+        try {
+            const updated = await request('/messages/' + msg.id + '/reactions', {
+                method: 'POST',
+                body: JSON.stringify({ emoji: emoji })
+            });
+            upsertMessage(updated);
+        } catch (err) {
+            toast(err.message);
+        }
+    }
+
+    function openEditMessageModal(msg) {
+        const { body, actions } = openModal('Edit message');
+        const area = el('textarea');
+        area.rows = 3;
+        area.maxLength = 2000;
+        area.value = msg.content || '';
+        body.appendChild(area);
+        const save = el('button', 'btn btn-primary', 'Save');
+        save.type = 'button';
+        save.addEventListener('click', async () => {
+            const content = area.value.trim();
+            if (!content) {
+                toast('Message cannot be empty');
+                return;
+            }
+            try {
+                const updated = await request('/messages/' + msg.id, {
+                    method: 'PUT',
+                    body: JSON.stringify({ content: content })
+                });
+                closeModal();
+                upsertMessage(updated);
+            } catch (err) {
+                toast(err.message);
+            }
+        });
+        actions.appendChild(save);
+        const cancel = el('button', 'btn btn-ghost', 'Cancel');
+        cancel.type = 'button';
+        cancel.addEventListener('click', closeModal);
+        actions.appendChild(cancel);
+    }
+
+    async function removeOwnMessage(msg) {
+        try {
+            await request('/messages/' + msg.id, { method: 'DELETE' });
+            const conversationId = msg.conversationId || (state.currentConversation && state.currentConversation.id);
+            removeMessage(conversationId, msg.id);
+        } catch (err) {
+            toast(err.message);
+        }
+    }
+
+    function removeMessage(conversationId, messageId) {
+        if (!conversationId || !messageId) return;
+        const list = state.messages.get(conversationId) || [];
+        state.messages.set(conversationId, list.filter((item) => item.id !== messageId));
+        if (state.currentConversation && state.currentConversation.id === conversationId) {
+            renderMessages();
+        }
     }
 
     function upsertMessage(msg) {
@@ -377,7 +523,7 @@
         state.messages.set(msg.conversationId, list);
         const conv = state.conversations.find((item) => item.id === msg.conversationId);
         if (conv) {
-            conv.lastMessageText = msg.content;
+            conv.lastMessageText = msg.deleted ? 'This message was deleted.' : msg.content;
             conv.lastMessageAt = msg.createdAt;
         }
         if (state.currentConversation && state.currentConversation.id === msg.conversationId) {
@@ -404,6 +550,16 @@
         $('chat-online-dot').hidden = isGroup(conv);
         renderConversations();
         subscribeConversation(id);
+        clearReply();
+        if (isGroup(conv) && !conv.myRole) {
+            try {
+                const members = await request('/conversations/' + id + '/members');
+                const me = members.find((member) => state.user && member.userId === state.user.id);
+                conv.myRole = me ? me.role : null;
+            } catch (err) {
+                conv.myRole = null;
+            }
+        }
         try {
             const messages = await request('/conversations/' + id + '/messages?size=50');
             state.messages.set(id, messages);
@@ -482,7 +638,7 @@
             setAvatar(avatar, group.title, group.avatarUrl);
             const mid = el('div');
             mid.appendChild(el('strong', '', group.title));
-            mid.appendChild(el('span', 'muted', group.memberCount + ' members'));
+            mid.appendChild(el('span', 'muted', group.memberCount + ' members · ' + (group.isPrivate ? 'Private' : 'Public')));
             row.appendChild(avatar);
             row.appendChild(mid);
             const action = el('div', 'row-gap');
@@ -497,14 +653,31 @@
             } else if (group.membershipStatus === 'PENDING') {
                 const pending = el('span', 'pill pill-mute', 'Pending');
                 action.appendChild(pending);
-            } else {
-                const join = el('button', 'pill pill-ok', 'Request to Join');
-                join.type = 'button';
-                join.addEventListener('click', async () => {
+            } else if (group.membershipStatus === 'BLOCKED') {
+                action.appendChild(el('span', 'pill pill-no', 'Blocked'));
+            } else if (group.isPrivate) {
+                const requestJoin = el('button', 'pill pill-ok', 'Request to Join');
+                requestJoin.type = 'button';
+                requestJoin.addEventListener('click', async () => {
                     try {
                         await request('/conversations/groups/' + group.id + '/join-requests', { method: 'POST' });
                         toast('Join request sent');
                         group.membershipStatus = 'PENDING';
+                        renderDiscoverGroups();
+                    } catch (err) {
+                        toast(err.message);
+                    }
+                });
+                action.appendChild(requestJoin);
+            } else {
+                const join = el('button', 'pill pill-ok', 'Join');
+                join.type = 'button';
+                join.addEventListener('click', async () => {
+                    try {
+                        await request('/conversations/groups/' + group.id + '/join', { method: 'POST' });
+                        toast('Joined group');
+                        await loadConversations();
+                        group.membershipStatus = 'MEMBER';
                         renderDiscoverGroups();
                     } catch (err) {
                         toast(err.message);
@@ -653,12 +826,22 @@
         const desc = el('textarea');
         desc.placeholder = 'Description';
         desc.rows = 3;
+        const privacy = el('label', 'pref');
+        privacy.appendChild(el('span', '', 'Private group (join by request only)'));
+        const privacySwitch = el('span', 'switch');
+        const privateBox = document.createElement('input');
+        privateBox.type = 'checkbox';
+        const privacySlider = el('span', 'slider');
+        privacySwitch.appendChild(privateBox);
+        privacySwitch.appendChild(privacySlider);
+        privacy.appendChild(privacySwitch);
         const search = el('input');
         search.placeholder = 'Search users to add as members';
         const picks = el('div', 'card-list');
         const selected = new Set();
         body.appendChild(title);
         body.appendChild(desc);
+        body.appendChild(privacy);
         body.appendChild(el('p', 'muted', 'Add members from ChatSphere'));
         body.appendChild(search);
         body.appendChild(picks);
@@ -706,7 +889,8 @@
                     body: JSON.stringify({
                         title: title.value,
                         description: desc.value,
-                        memberIds: Array.from(selected)
+                        memberIds: Array.from(selected),
+                        isPrivate: privateBox.checked
                     })
                 });
                 closeModal();
@@ -738,12 +922,20 @@
             const details = await request('/conversations/' + conv.id);
             const members = await request('/conversations/' + conv.id + '/members');
             state.groupMembers = members;
+            const me = members.find((member) => state.user && member.userId === state.user.id);
+            conv.myRole = me ? me.role : null;
+            const isAdmin = conv.myRole === 'OWNER' || conv.myRole === 'MODERATOR';
             openView('group');
             $('group-manage-title').textContent = details.title || convTitle(conv);
-            $('group-manage-meta').textContent = members.length + ' members · Group';
+            $('group-manage-meta').textContent = members.length + ' members · Group' + (conv.myRole ? ' · You are ' + conv.myRole.toLowerCase() : '');
             $('group-members-heading').textContent = 'Members (' + members.length + ')';
             $('group-title-input').value = details.title || '';
             $('group-desc-input').value = details.description || '';
+            $('group-title-input').disabled = !isAdmin;
+            $('group-desc-input').disabled = !isAdmin;
+            $('group-private-input').checked = !!details.isPrivate;
+            $('group-private-input').disabled = !isAdmin;
+            $('group-save-btn').disabled = !isAdmin;
             $('group-created').textContent = details.createdAt
                 ? 'Created ' + new Date(details.createdAt).toLocaleDateString()
                 : 'Created recently';
@@ -758,28 +950,64 @@
                 mid.appendChild(el('span', 'muted', member.role + (member.online ? ' · Online' : '')));
                 row.appendChild(avatar);
                 row.appendChild(mid);
-                if (member.userId !== state.user.id) {
-                    const remove = el('button', 'pill pill-no', 'Remove');
-                    remove.type = 'button';
-                    remove.addEventListener('click', async () => {
-                        try {
-                            await request('/conversations/' + conv.id + '/members/' + member.userId, { method: 'DELETE' });
-                            openGroupManage();
-                        } catch (err) {
-                            toast(err.message);
-                        }
-                    });
-                    row.appendChild(remove);
+                const isSelf = member.userId === state.user.id;
+                if (!isSelf && isAdmin) {
+                    const actions = el('div', 'row-gap');
+                    if (conv.myRole === 'OWNER' && member.role === 'MEMBER') {
+                        const promote = el('button', 'pill pill-ok', 'Promote');
+                        promote.type = 'button';
+                        promote.addEventListener('click', () => changeMemberRole(conv.id, member.userId, 'MODERATOR'));
+                        actions.appendChild(promote);
+                    }
+                    if (conv.myRole === 'OWNER' && member.role === 'MODERATOR') {
+                        const demote = el('button', 'pill pill-mute', 'Demote');
+                        demote.type = 'button';
+                        demote.addEventListener('click', () => changeMemberRole(conv.id, member.userId, 'MEMBER'));
+                        actions.appendChild(demote);
+                    }
+                    const canRemove = conv.myRole === 'OWNER' || member.role === 'MEMBER';
+                    if (canRemove) {
+                        const remove = el('button', 'pill pill-no', 'Remove');
+                        remove.type = 'button';
+                        remove.addEventListener('click', async () => {
+                            try {
+                                await request('/conversations/' + conv.id + '/members/' + member.userId, { method: 'DELETE' });
+                                toast('Member removed');
+                                openGroupManage();
+                            } catch (err) {
+                                toast(err.message);
+                            }
+                        });
+                        actions.appendChild(remove);
+                    }
+                    if (member.role === 'MEMBER') {
+                        const block = el('button', 'pill pill-no', 'Block');
+                        block.type = 'button';
+                        block.addEventListener('click', async () => {
+                            try {
+                                await request('/conversations/groups/' + conv.id + '/blocks', {
+                                    method: 'POST',
+                                    body: JSON.stringify({ userId: member.userId })
+                                });
+                                toast('User blocked from group');
+                                openGroupManage();
+                            } catch (err) {
+                                toast(err.message);
+                            }
+                        });
+                        actions.appendChild(block);
+                    }
+                    row.appendChild(actions);
                 }
                 list.appendChild(row);
             });
 
-            const isOwner = members.some(m => m.userId === state.user.id && m.role === 'OWNER');
-            document.querySelectorAll('.group-menu__item[data-gtab="requests"], .group-menu__item[data-gtab="invitations"]')
-                .forEach((item) => { item.hidden = !isOwner; });
-            if (!isOwner) switchGroupTab('info');
+            $('add-member-btn').hidden = !isAdmin;
+            document.querySelectorAll('.group-menu__item[data-gtab="requests"], .group-menu__item[data-gtab="invitations"], .group-menu__item[data-gtab="blocked"]')
+                .forEach((item) => { item.hidden = !isAdmin; });
+            if (!isAdmin) switchGroupTab('info');
 
-            if (isOwner) {
+            if (isAdmin) {
                 try {
                     const joinRequests = await request('/conversations/groups/' + conv.id + '/join-requests');
                     const invitations = await request('/conversations/groups/' + conv.id + '/invitations');
@@ -788,10 +1016,62 @@
                 } catch (err) {
                     console.error('Failed to load join requests/invitations:', err);
                 }
+                try {
+                    state.groupBlocked = await request('/conversations/groups/' + conv.id + '/blocks');
+                    renderGroupBlocked();
+                } catch (err) {
+                    console.error('Failed to load blocked members:', err);
+                }
             }
         } catch (err) {
             toast(err.message);
         }
+    }
+
+    async function changeMemberRole(groupId, memberId, role) {
+        try {
+            await request('/conversations/groups/' + groupId + '/members/' + memberId + '/role?role=' + role, {
+                method: 'PUT'
+            });
+            toast(role === 'MODERATOR' ? 'Member promoted to moderator' : 'Moderator demoted');
+            openGroupManage();
+        } catch (err) {
+            toast(err.message);
+        }
+    }
+
+    function renderGroupBlocked() {
+        const list = $('group-blocked-list');
+        while (list.firstChild) list.removeChild(list.firstChild);
+        const blocks = state.groupBlocked || [];
+        if (!blocks.length) {
+            list.appendChild(el('div', 'empty', 'No blocked users'));
+            return;
+        }
+        const conv = state.currentConversation;
+        blocks.forEach((blocked) => {
+            const row = el('div', 'card-row');
+            const avatar = el('div', 'avatar');
+            setAvatar(avatar, blocked.displayName, blocked.avatarUrl);
+            const mid = el('div');
+            mid.appendChild(el('strong', '', blocked.displayName));
+            mid.appendChild(el('span', 'muted', '@' + blocked.username));
+            row.appendChild(avatar);
+            row.appendChild(mid);
+            const unblock = el('button', 'pill pill-ok', 'Unblock');
+            unblock.type = 'button';
+            unblock.addEventListener('click', async () => {
+                try {
+                    await request('/conversations/groups/' + conv.id + '/blocks/' + blocked.userId, { method: 'DELETE' });
+                    toast('User unblocked');
+                    openGroupManage();
+                } catch (err) {
+                    toast(err.message);
+                }
+            });
+            row.appendChild(unblock);
+            list.appendChild(row);
+        });
     }
 
     function renderGroupJoinRequests(requests) {
@@ -945,6 +1225,25 @@
             }
         });
         actions.appendChild(add);
+        const invite = el('button', 'btn btn-outline', 'Send invitations');
+        invite.type = 'button';
+        invite.addEventListener('click', async () => {
+            if (selected.size === 0) {
+                toast('Select at least one user');
+                return;
+            }
+            try {
+                await request('/conversations/groups/' + conv.id + '/invitations', {
+                    method: 'POST',
+                    body: JSON.stringify({ userIds: Array.from(selected) })
+                });
+                closeModal();
+                toast('Invitations sent');
+            } catch (err) {
+                toast(err.message);
+            }
+        });
+        actions.appendChild(invite);
         const cancel = el('button', 'btn btn-ghost', 'Cancel');
         cancel.type = 'button';
         cancel.addEventListener('click', closeModal);
@@ -1038,8 +1337,10 @@
         const dest = '/topic/conversations/' + id;
         state.stomp.subscribe(dest, (frame) => {
             if (!frame) return;
-            if (frame.event === 'NEW_MESSAGE' || frame.event === 'MESSAGE_EDITED') {
+            if (frame.event === 'NEW_MESSAGE' || frame.event === 'MESSAGE_EDITED' || frame.event === 'MESSAGE_REACTED') {
                 upsertMessage(frame.data);
+            } else if (frame.event === 'MESSAGE_DELETED') {
+                removeMessage(frame.data && frame.data.conversationId, frame.data && frame.data.messageId);
             }
         });
         state.subscriptions.set(id, dest);
@@ -1178,13 +1479,30 @@
         $('modal-close').addEventListener('click', closeModal);
         $('modal-backdrop').addEventListener('click', closeModal);
         $('add-member-btn').addEventListener('click', openAddMemberModal);
+        $('group-leave-btn').addEventListener('click', async () => {
+            const conv = state.currentConversation;
+            if (!conv || !isGroup(conv)) {
+                toast('Open a group chat first');
+                return;
+            }
+            try {
+                await request('/conversations/' + conv.id + '/leave', { method: 'POST' });
+                toast('Left the group');
+                state.currentConversation = null;
+                await loadConversations();
+                openView('chats');
+            } catch (err) {
+                toast(err.message);
+            }
+        });
         $('group-save-btn').addEventListener('click', async () => {
             try {
                 await request('/conversations/' + state.currentConversation.id, {
                     method: 'PUT',
                     body: JSON.stringify({
                         title: $('group-title-input').value,
-                        description: $('group-desc-input').value
+                        description: $('group-desc-input').value,
+                        isPrivate: $('group-private-input').checked
                     })
                 });
                 await loadConversations();
@@ -1253,12 +1571,30 @@
         }
         const add = el('button', 'pill pill-ok', 'Add friend');
         add.type = 'button';
-        add.addEventListener('click', async () => {
+        add.addEventListener('click', () => openFriendRequestModal(person));
+        return add;
+    }
+
+    function openFriendRequestModal(person) {
+        const { body, actions } = openModal('Friend request to ' + (person.displayName || person.username));
+        const note = el('textarea');
+        note.rows = 3;
+        note.maxLength = 280;
+        note.placeholder = 'Add a short message (optional)';
+        body.appendChild(note);
+        const send = el('button', 'btn btn-primary', 'Send request');
+        send.type = 'button';
+        send.addEventListener('click', async () => {
             try {
                 await request('/friends/requests', {
                     method: 'POST',
-                    body: JSON.stringify({ userId: person.id, username: person.username })
+                    body: JSON.stringify({
+                        username: person.username,
+                        userId: person.id,
+                        message: note.value.trim() || null
+                    })
                 });
+                closeModal();
                 toast('Friend request sent');
                 await loadFriends();
                 searchUsers();
@@ -1266,24 +1602,35 @@
                 toast(err.message);
             }
         });
-        return add;
+        actions.appendChild(send);
+        const cancel = el('button', 'btn btn-ghost', 'Cancel');
+        cancel.type = 'button';
+        cancel.addEventListener('click', closeModal);
+        actions.appendChild(cancel);
     }
 
     function setupChat() {
+        $('reply-cancel-btn').addEventListener('click', clearReply);
         $('message-send-form').addEventListener('submit', async (event) => {
             event.preventDefault();
             const conv = state.currentConversation;
             const input = $('message-content-input');
             const content = input.value.trim();
             if (!conv || !content) return;
+            const payload = {
+                content: content,
+                replyToId: state.replyTo ? state.replyTo.id : null,
+                clientMessageId: generateClientMessageId()
+            };
             input.value = '';
+            clearReply();
             try {
                 if (state.stomp) {
-                    state.stomp.send('/app/conversations/' + conv.id + '/send', { content: content });
+                    state.stomp.send('/app/conversations/' + conv.id + '/send', payload);
                 } else {
                     const msg = await request('/conversations/' + conv.id + '/messages', {
                         method: 'POST',
-                        body: JSON.stringify({ content: content })
+                        body: JSON.stringify(payload)
                     });
                     upsertMessage(msg);
                 }
@@ -1291,6 +1638,13 @@
                 toast(err.message);
             }
         });
+    }
+
+    function generateClientMessageId() {
+        if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+            return window.crypto.randomUUID();
+        }
+        return 'cm-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
     }
 
     function setupSettings() {
