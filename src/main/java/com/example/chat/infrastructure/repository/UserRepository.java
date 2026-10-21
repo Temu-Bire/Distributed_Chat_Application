@@ -23,7 +23,10 @@ public interface UserRepository extends JpaRepository<UserEntity, UUID> {
     boolean existsByEmailIgnoreCase(String email);
 
     @Query("SELECT u FROM UserEntity u WHERE u.deactivated = false AND " +
+           "(:excludeId IS NULL OR u.id <> :excludeId) AND " +
            "(LOWER(u.username) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
            " LOWER(u.displayName) LIKE LOWER(CONCAT('%', :query, '%')))")
-    Page<UserEntity> searchUsers(@Param("query") String query, Pageable pageable);
+    Page<UserEntity> searchUsers(@Param("query") String query,
+                                 @Param("excludeId") UUID excludeId,
+                                 Pageable pageable);
 }

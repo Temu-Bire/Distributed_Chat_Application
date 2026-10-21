@@ -1,6 +1,7 @@
 package com.example.chat.api;
 
 import com.example.chat.application.AuthService;
+import com.example.chat.application.FriendService;
 import com.example.chat.dto.auth.ChangePasswordRequest;
 import com.example.chat.dto.auth.UpdateProfileRequest;
 import com.example.chat.dto.auth.UserProfileResponse;
@@ -13,15 +14,18 @@ import org.springframework.web.bind.annotation.*;
 
 import java.security.Principal;
 import java.util.Map;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/users")
 public class UserController {
 
     private final AuthService authService;
+    private final FriendService friendService;
 
-    public UserController(AuthService authService) {
+    public UserController(AuthService authService, FriendService friendService) {
         this.authService = authService;
+        this.friendService = friendService;
     }
 
     @GetMapping("/profile")
@@ -51,9 +55,16 @@ public class UserController {
 
     @GetMapping("/search")
     public ResponseEntity<Page<UserSearchResult>> searchUsers(
+            Principal principal,
             @RequestParam(name = "query", required = false, defaultValue = "") String query,
             @RequestParam(name = "page", defaultValue = "0") int page,
             @RequestParam(name = "size", defaultValue = "20") int size) {
-        return ResponseEntity.ok(authService.searchUsers(query, page, size));
+        UserProfileResponse current = authService.getCurrentUser(principal);
+        UUID currentId = current.id();
+        Page<UserSearchResult> results = authService.searchUsers(query, page, size, currentId)
+            .map(user -> user.withFriendshipStatus(
+                friendService.getFriendshipStatus(currentId, user.id()).status()
+            ));
+        return ResponseEntity.ok(results);
     }
 }

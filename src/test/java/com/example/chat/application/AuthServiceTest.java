@@ -131,5 +131,15 @@ class AuthServiceTest {
 
         Page<UserSearchResult> results = authService.searchUsers("ke", 0, 10);
         assertThat(results.getContent()).extracting(UserSearchResult::username).contains("kenneth", "kevin");
+
+        UUID kennethId = results.getContent().stream()
+            .filter(user -> user.username().equals("kenneth"))
+            .findFirst()
+            .orElseThrow()
+            .id();
+        Page<UserSearchResult> withoutSelf = authService.searchUsers("ke", 0, 10, kennethId);
+        assertThat(withoutSelf.getContent()).extracting(UserSearchResult::username)
+            .contains("kevin")
+            .doesNotContain("kenneth");
     }
 }

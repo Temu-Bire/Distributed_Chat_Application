@@ -52,10 +52,16 @@
             </label>
             <div class="auth-row">
                 <label class="check"><input id="login-remember" type="checkbox"> Remember me</label>
+                <button id="forgot-password-btn" type="button" class="link">Forgot password?</button>
             </div>
             <div id="login-error" class="alert" role="alert" hidden></div>
             <button id="login-submit" type="submit" class="btn btn-primary">Log In</button>
         </form>
+        <div class="auth-divider"><span>or continue with</span></div>
+        <div class="social-row">
+            <button type="button" class="btn btn-outline social-btn" data-social="Google">Google</button>
+            <button type="button" class="btn btn-outline social-btn" data-social="Microsoft">Microsoft</button>
+        </div>
         <p class="auth-switch">Don't have an account? <button id="show-register-btn" type="button" class="link">Sign up</button></p>
     </div>
 </section>
@@ -208,12 +214,15 @@
         <div id="chat-view" class="chat-view" hidden>
             <header class="chat-head">
                 <button id="chat-back-btn" class="icon-btn mobile-only" type="button" aria-label="Back">←</button>
-                <div id="chat-avatar" class="avatar">?</div>
+                <div class="avatar-wrap">
+                    <div id="chat-avatar" class="avatar">?</div>
+                    <em id="chat-online-dot" class="presence" hidden></em>
+                </div>
                 <div class="chat-head__meta">
                     <h2 id="chat-title">Chat</h2>
                     <p id="chat-subtitle">Online</p>
                 </div>
-                <button id="chat-info-btn" class="icon-btn" type="button" aria-label="Conversation info">i</button>
+                <button id="chat-info-btn" class="icon-btn" type="button" aria-label="Conversation info">ⓘ</button>
             </header>
             <div id="chat-messages" class="chat-thread" aria-live="polite"></div>
             <form id="message-send-form" class="composer" autocomplete="off">
@@ -223,11 +232,17 @@
         </div>
 
         <div id="friends-view" class="page" hidden>
-            <header class="page-head"><h1>Friends</h1></header>
+            <header class="page-head">
+                <div>
+                    <h1>Friends</h1>
+                    <p class="muted">Find people from ChatSphere and add them as friends</p>
+                </div>
+            </header>
             <div class="search-row">
-                <input id="user-search-input" type="search" placeholder="Search people by username...">
+                <input id="user-search-input" type="search" placeholder="Search people by name or username...">
                 <button id="user-search-btn" type="button" class="btn btn-primary btn-sm">Search</button>
             </div>
+            <h3 class="section-label">People on ChatSphere</h3>
             <ul id="search-results-list" class="card-list"></ul>
             <h3 class="section-label">Your friends</h3>
             <ul id="friends-list" class="card-list"></ul>
@@ -279,11 +294,12 @@
                     <h3>Group information</h3>
                     <label class="field"><span>Group name</span><input id="group-title-input" maxlength="100"></label>
                     <label class="field"><span>Description</span><textarea id="group-desc-input" maxlength="500" rows="3"></textarea></label>
+                    <p id="group-created" class="muted">Created recently</p>
                     <button id="group-save-btn" type="button" class="btn btn-primary btn-sm">Save changes</button>
                 </section>
                 <section class="panel-card">
                     <div class="row-between">
-                        <h3>Members</h3>
+                        <h3 id="group-members-heading">Members</h3>
                         <button id="add-member-btn" type="button" class="btn btn-primary btn-sm">+ Add members</button>
                     </div>
                     <ul id="group-members-list" class="card-list"></ul>
@@ -298,7 +314,7 @@
                     <div class="row-between">
                         <h3>Pending Invitations</h3>
                     </div>
-                    <ul id="group-invitations-list" class="card-list"></ul>
+                    <ul id="pending-group-invitations-list" class="card-list"></ul>
                 </section>
             </div>
         </div>
@@ -349,9 +365,23 @@
                         <span class="switch"><input id="pref-sound" type="checkbox"><span class="slider"></span></span>
                     </label>
                     <label class="pref">
+                        <span>Friend requests</span>
+                        <span class="switch"><input id="pref-friend-requests" type="checkbox" checked><span class="slider"></span></span>
+                    </label>
+                    <label class="pref">
+                        <span>Group mentions</span>
+                        <span class="switch"><input id="pref-group-mentions" type="checkbox" checked><span class="slider"></span></span>
+                    </label>
+                    <label class="pref">
                         <span>Show online status</span>
                         <span class="switch"><input id="pref-online" type="checkbox"><span class="slider"></span></span>
                     </label>
+                    <div class="pref pref--stack">
+                        <span>Status</span>
+                        <label class="radio"><input type="radio" name="status" value="online" checked> Online</label>
+                        <label class="radio"><input type="radio" name="status" value="away"> Away</label>
+                        <label class="radio"><input type="radio" name="status" value="hidden"> Do not disturb</label>
+                    </div>
                     <button id="save-prefs-btn" type="button" class="btn btn-primary btn-sm">Save preferences</button>
                 </section>
             </div>

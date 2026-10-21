@@ -10,6 +10,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContext;
@@ -155,10 +156,19 @@ public class AuthService {
 
     @Transactional(readOnly = true)
     public Page<UserSearchResult> searchUsers(String query, int page, int size) {
+        return searchUsers(query, page, size, null);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<UserSearchResult> searchUsers(String query, int page, int size, UUID excludeUserId) {
         int boundedPage = Math.max(0, page);
         int boundedSize = Math.clamp(size, 1, 50);
 
-        Page<UserEntity> users = userRepository.searchUsers(query == null ? "" : query.trim(), PageRequest.of(boundedPage, boundedSize));
+        Page<UserEntity> users = userRepository.searchUsers(
+            query == null ? "" : query.trim(),
+            excludeUserId,
+            PageRequest.of(boundedPage, boundedSize, Sort.by("displayName").ascending())
+        );
         return users.map(user -> {
             boolean isOnline = presenceService.isOnline(user.getUsername());
             return UserSearchResult.from(user, isOnline);

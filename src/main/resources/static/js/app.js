@@ -31,7 +31,9 @@
         theme: localStorage.getItem('chatsphere-theme') || 'light',
         discoverGroups: [],
         groupJoinRequests: [],
-        groupInvitations: []
+        groupInvitations: [],
+        groupMembers: [],
+        directory: []
     };
 
     const $ = (id) => document.getElementById(id);
@@ -156,6 +158,7 @@
         $('chat-view').hidden = true;
         $('friends-view').hidden = true;
         $('requests-view').hidden = true;
+        $('discover-view').hidden = true;
         $('group-view').hidden = true;
         $('settings-view').hidden = true;
         $('list-tabs').hidden = view !== 'chats' && view !== 'groups';
@@ -189,6 +192,7 @@
             $('app-shell').classList.add('show-page');
             renderFriends();
             renderFriendsSide();
+            searchUsers();
         } else if (view === 'requests') {
             $('requests-view').hidden = false;
             $('app-shell').classList.add('show-page');
@@ -398,7 +402,8 @@
         $('app-shell').classList.remove('show-page');
         setAvatar($('chat-avatar'), convTitle(conv), conv.avatarUrl);
         $('chat-title').textContent = convTitle(conv);
-        $('chat-subtitle').textContent = isGroup(conv) ? 'Group chat' : 'Private chat';
+        $('chat-subtitle').textContent = isGroup(conv) ? (conv.memberCount ? conv.memberCount + ' members' : 'Group chat') : 'Private chat';
+        $('chat-online-dot').hidden = isGroup(conv);
         renderConversations();
         subscribeConversation(id);
         try {
@@ -593,37 +598,50 @@
         return { body, actions };
     }
 
+    async function fetchDirectory(query) {
+        const page = await request('/users/search?query=' + encodeURIComponent(query || '') + '&size=50');
+        const content = page.content || page || [];
+        state.directory = content.filter((person) => !state.user || person.id !== state.user.id);
+        return state.directory;
+    }
+
     function openNewPrivateModal() {
         const { body, actions } = openModal('Start a private chat');
         const input = el('input');
-        input.placeholder = 'Search friends by name';
+        input.placeholder = 'Search people from ChatSphere';
         const results = el('div', 'card-list');
         body.appendChild(input);
         body.appendChild(results);
-        function draw(people) {
+        async function draw(query) {
             while (results.firstChild) results.removeChild(results.firstChild);
-            people.forEach((person) => {
-                const row = el('button', 'card-row');
-                row.type = 'button';
-                const avatar = el('div', 'avatar');
-                setAvatar(avatar, person.displayName, person.avatarUrl);
-                const mid = el('div');
-                mid.appendChild(el('strong', '', person.displayName));
-                mid.appendChild(el('span', 'muted', '@' + person.username));
-                row.appendChild(avatar);
-                row.appendChild(mid);
-                row.addEventListener('click', () => {
-                    closeModal();
-                    startDirect(person.id);
+            try {
+                const people = await fetchDirectory(query);
+                if (!people.length) {
+                    results.appendChild(el('div', 'empty', 'No users found'));
+                    return;
+                }
+                people.forEach((person) => {
+                    const row = el('button', 'card-row');
+                    row.type = 'button';
+                    const avatar = el('div', 'avatar');
+                    setAvatar(avatar, person.displayName, person.avatarUrl);
+                    const mid = el('div');
+                    mid.appendChild(el('strong', '', person.displayName));
+                    mid.appendChild(el('span', 'muted', '@' + person.username + (person.online ? ' · Online' : '')));
+                    row.appendChild(avatar);
+                    row.appendChild(mid);
+                    row.addEventListener('click', () => {
+                        closeModal();
+                        startDirect(person.id);
+                    });
+                    results.appendChild(row);
                 });
-                results.appendChild(row);
-            });
+            } catch (err) {
+                toast(err.message);
+            }
         }
-        draw(state.friends);
-        input.addEventListener('input', () => {
-            const q = input.value.toLowerCase();
-            draw(state.friends.filter((f) => (f.displayName + f.username).toLowerCase().includes(q)));
-        });
+        draw('');
+        input.addEventListener('input', () => draw(input.value));
         const cancel = el('button', 'btn btn-ghost', 'Cancel');
         cancel.type = 'button';
         cancel.addEventListener('click', closeModal);
@@ -637,27 +655,50 @@
         const desc = el('textarea');
         desc.placeholder = 'Description';
         desc.rows = 3;
+        const search = el('input');
+        search.placeholder = 'Search users to add as members';
         const picks = el('div', 'card-list');
         const selected = new Set();
-        state.friends.forEach((friend) => {
-            const row = el('label', 'card-row');
-            const box = document.createElement('input');
-            box.type = 'checkbox';
-            box.addEventListener('change', () => {
-                if (box.checked) selected.add(friend.id);
-                else selected.delete(friend.id);
-            });
-            const mid = el('div');
-            mid.appendChild(el('strong', '', friend.displayName));
-            mid.appendChild(el('span', 'muted', '@' + friend.username));
-            row.appendChild(box);
-            row.appendChild(mid);
-            picks.appendChild(row);
-        });
         body.appendChild(title);
         body.appendChild(desc);
-        body.appendChild(el('p', 'muted', 'Add members'));
+        body.appendChild(el('p', 'muted', 'Add members from ChatSphere'));
+        body.appendChild(search);
         body.appendChild(picks);
+
+        async function draw(query) {
+            while (picks.firstChild) picks.removeChild(picks.firstChild);
+            try {
+                const people = await fetchDirectory(query);
+                if (!people.length) {
+                    picks.appendChild(el('div', 'empty', 'No users found'));
+                    return;
+                }
+                people.forEach((person) => {
+                    const row = el('label', 'card-row');
+                    const box = document.createElement('input');
+                    box.type = 'checkbox';
+                    box.checked = selected.has(person.id);
+                    box.addEventListener('change', () => {
+                        if (box.checked) selected.add(person.id);
+                        else selected.delete(person.id);
+                    });
+                    const avatar = el('div', 'avatar');
+                    setAvatar(avatar, person.displayName, person.avatarUrl);
+                    const mid = el('div');
+                    mid.appendChild(el('strong', '', person.displayName));
+                    mid.appendChild(el('span', 'muted', '@' + person.username));
+                    row.appendChild(box);
+                    row.appendChild(mid);
+                    row.insertBefore(avatar, mid);
+                    picks.appendChild(row);
+                });
+            } catch (err) {
+                toast(err.message);
+            }
+        }
+        draw('');
+        search.addEventListener('input', () => draw(search.value));
+
         const create = el('button', 'btn btn-primary', 'Create group');
         create.type = 'button';
         create.addEventListener('click', async () => {
@@ -689,11 +730,16 @@
         try {
             const details = await request('/conversations/' + conv.id);
             const members = await request('/conversations/' + conv.id + '/members');
+            state.groupMembers = members;
             openView('group');
             $('group-manage-title').textContent = details.title || convTitle(conv);
             $('group-manage-meta').textContent = members.length + ' members · Group';
+            $('group-members-heading').textContent = 'Members (' + members.length + ')';
             $('group-title-input').value = details.title || '';
             $('group-desc-input').value = details.description || '';
+            $('group-created').textContent = details.createdAt
+                ? 'Created ' + new Date(details.createdAt).toLocaleDateString()
+                : 'Created recently';
             const list = $('group-members-list');
             while (list.firstChild) list.removeChild(list.firstChild);
             members.forEach((member) => {
@@ -787,7 +833,7 @@
     }
 
     function renderGroupInvitations(invitations) {
-        const list = $('group-invitations-list');
+        const list = $('pending-group-invitations-list');
         while (list.firstChild) list.removeChild(list.firstChild);
         if (!invitations.length) {
             list.appendChild(el('div', 'empty', 'No pending invitations'));
@@ -822,25 +868,24 @@
         const conv = state.currentConversation;
         const { body, actions } = openModal('Add members');
         const input = el('input');
-        input.placeholder = 'Search users by name...';
+        input.placeholder = 'Search users from the database...';
         const results = el('div', 'card-list');
         const selected = new Set();
+        const memberIds = new Set((state.groupMembers || []).map((member) => member.userId));
+        body.appendChild(el('p', 'muted', 'Choose registered users to add to this group'));
         body.appendChild(input);
         body.appendChild(results);
 
         async function searchUsersForInvite(query) {
             while (results.firstChild) results.removeChild(results.firstChild);
-            if (!query.trim()) {
-                state.friends.forEach((friend) => renderUserOption(friend));
-                return;
-            }
             try {
-                const page = await request('/users/search?query=' + encodeURIComponent(query));
-                const content = page.content || page || [];
-                content.forEach((person) => {
-                    if (state.user && person.id === state.user.id) return;
-                    renderUserOption(person);
-                });
+                const people = await fetchDirectory(query);
+                const available = people.filter((person) => !memberIds.has(person.id));
+                if (!available.length) {
+                    results.appendChild(el('div', 'empty', 'No other users available'));
+                    return;
+                }
+                available.forEach(renderUserOption);
             } catch (err) {
                 toast(err.message);
             }
@@ -859,7 +904,7 @@
             setAvatar(avatar, person.displayName, person.avatarUrl);
             const mid = el('div');
             mid.appendChild(el('strong', '', person.displayName));
-            mid.appendChild(el('span', 'muted', '@' + person.username));
+            mid.appendChild(el('span', 'muted', '@' + person.username + (person.online ? ' · Online' : '')));
             row.appendChild(box);
             row.appendChild(avatar);
             row.appendChild(mid);
@@ -869,26 +914,29 @@
         input.addEventListener('input', () => searchUsersForInvite(input.value));
         searchUsersForInvite('');
 
-        const invite = el('button', 'btn btn-primary', 'Send Invitations');
-        invite.type = 'button';
-        invite.addEventListener('click', async () => {
+        const add = el('button', 'btn btn-primary', 'Add members');
+        add.type = 'button';
+        add.addEventListener('click', async () => {
             if (selected.size === 0) {
                 toast('Select at least one user');
                 return;
             }
             try {
-                await request('/conversations/' + conv.id + '/invitations', {
-                    method: 'POST',
-                    body: JSON.stringify({ userIds: Array.from(selected) })
-                });
+                const ids = Array.from(selected);
+                for (const userId of ids) {
+                    await request('/conversations/' + conv.id + '/members', {
+                        method: 'POST',
+                        body: JSON.stringify({ userId: userId })
+                    });
+                }
                 closeModal();
-                toast('Invitations sent');
+                toast('Members added');
                 openGroupManage();
             } catch (err) {
                 toast(err.message);
             }
         });
-        actions.appendChild(invite);
+        actions.appendChild(add);
         const cancel = el('button', 'btn btn-ghost', 'Cancel');
         cancel.type = 'button';
         cancel.addEventListener('click', closeModal);
@@ -1013,6 +1061,10 @@
     function setupAuth() {
         $('show-register-btn').addEventListener('click', () => showAuth('register'));
         $('show-login-btn').addEventListener('click', () => showAuth('login'));
+        $('forgot-password-btn').addEventListener('click', () => toast('Ask an admin to reset the account password'));
+        document.querySelectorAll('.social-btn').forEach((btn) => {
+            btn.addEventListener('click', () => toast(btn.dataset.social + ' sign-in is coming soon'));
+        });
         $('login-form').addEventListener('submit', async (event) => {
             event.preventDefault();
             try {
@@ -1094,6 +1146,10 @@
                 searchUsers();
             }
         });
+        $('user-search-input').addEventListener('input', () => {
+            clearTimeout(state.searchTimer);
+            state.searchTimer = setTimeout(searchUsers, 250);
+        });
         $('group-discover-search-btn').addEventListener('click', loadDiscoverGroups);
         $('group-discover-search').addEventListener('keydown', (event) => {
             if (event.key === 'Enter') {
@@ -1126,38 +1182,73 @@
         const list = $('search-results-list');
         while (list.firstChild) list.removeChild(list.firstChild);
         try {
-            const page = await request('/users/search?query=' + encodeURIComponent(query));
-            const content = page.content || page || [];
-            content.forEach((person) => {
-                if (state.user && person.id === state.user.id) return;
+            const people = await fetchDirectory(query);
+            if (!people.length) {
+                list.appendChild(el('div', 'empty', 'No other users found'));
+                return;
+            }
+            people.forEach((person) => {
                 const row = el('div', 'card-row');
                 const avatar = el('div', 'avatar');
                 setAvatar(avatar, person.displayName, person.avatarUrl);
                 const mid = el('div');
                 mid.appendChild(el('strong', '', person.displayName));
-                mid.appendChild(el('span', 'muted', '@' + person.username));
-                const add = el('button', 'pill pill-ok', 'Add friend');
-                add.type = 'button';
-                add.addEventListener('click', async () => {
-                    try {
-                        await request('/friends/requests', {
-                            method: 'POST',
-                            body: JSON.stringify({ userId: person.id, username: person.username })
-                        });
-                        toast('Friend request sent');
-                        await loadFriends();
-                    } catch (err) {
-                        toast(err.message);
-                    }
-                });
+                mid.appendChild(el('span', 'muted', '@' + person.username + (person.online ? ' · Online' : '')));
                 row.appendChild(avatar);
                 row.appendChild(mid);
-                row.appendChild(add);
+                row.appendChild(friendActionButton(person));
                 list.appendChild(row);
             });
         } catch (err) {
             toast(err.message);
         }
+    }
+
+    function friendActionButton(person) {
+        const status = person.friendshipStatus || 'NONE';
+        if (status === 'FRIENDS') {
+            const message = el('button', 'pill pill-ok', 'Message');
+            message.type = 'button';
+            message.addEventListener('click', () => startDirect(person.id));
+            return message;
+        }
+        if (status === 'PENDING_SENT') {
+            return el('button', 'pill pill-mute', 'Requested');
+        }
+        if (status === 'PENDING_RECEIVED') {
+            const accept = el('button', 'pill pill-ok', 'Accept');
+            accept.type = 'button';
+            accept.addEventListener('click', async () => {
+                try {
+                    await request('/friends/requests', {
+                        method: 'POST',
+                        body: JSON.stringify({ userId: person.id, username: person.username })
+                    });
+                    toast('Friend request accepted');
+                    await loadFriends();
+                    searchUsers();
+                } catch (err) {
+                    toast(err.message);
+                }
+            });
+            return accept;
+        }
+        const add = el('button', 'pill pill-ok', 'Add friend');
+        add.type = 'button';
+        add.addEventListener('click', async () => {
+            try {
+                await request('/friends/requests', {
+                    method: 'POST',
+                    body: JSON.stringify({ userId: person.id, username: person.username })
+                });
+                toast('Friend request sent');
+                await loadFriends();
+                searchUsers();
+            } catch (err) {
+                toast(err.message);
+            }
+        });
+        return add;
     }
 
     function setupChat() {
