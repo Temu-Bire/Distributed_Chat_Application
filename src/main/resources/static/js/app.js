@@ -323,7 +323,12 @@
             wrap.appendChild(reject);
             return wrap;
         });
-        fillPeopleList($('outgoing-requests-list'), state.outgoing, (req) => {
+        fillPeopleList($('outgoing-requests-list'), state.outgoing.map((req) => ({
+            ...req,
+            displayName: req.receiverDisplayName,
+            username: req.receiverUsername,
+            avatarUrl: req.receiverAvatarUrl
+        })), (req) => {
             const cancel = el('button', 'pill pill-mute', 'Cancel');
             cancel.type = 'button';
             cancel.addEventListener('click', () => actOnRequest(req.id, 'cancel'));
