@@ -8,7 +8,9 @@ spring:
     password: ""
   jpa:
     hibernate:
-      ddl-auto: none
+      # Same contract as production: migrations are the only schema writer,
+      # and every test boot verifies the entities still match them.
+      ddl-auto: validate
     open-in-view: false
   flyway:
     enabled: true
