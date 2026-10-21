@@ -36,6 +36,9 @@ public class ConversationEntity {
     @Column(length = 50)
     private String lastMessageSender;
 
+    @Column(name = "is_private", nullable = false)
+    private boolean isPrivate = false;
+
     @Column(nullable = false, updatable = false)
     private Instant createdAt = Instant.now();
 
@@ -83,6 +86,9 @@ public class ConversationEntity {
 
     public String getLastMessageSender() { return lastMessageSender; }
     public void setLastMessageSender(String lastMessageSender) { this.lastMessageSender = lastMessageSender; }
+
+    public boolean isPrivate() { return isPrivate; }
+    public void setPrivate(boolean isPrivate) { this.isPrivate = isPrivate; }
 
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }

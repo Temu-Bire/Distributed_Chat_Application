@@ -7,6 +7,8 @@ import java.util.UUID;
 @Entity
 @Table(name = "messages", indexes = {
     @Index(name = "idx_msg_conv_created", columnList = "conversation_id, created_at")
+}, uniqueConstraints = {
+    @UniqueConstraint(name = "uq_msg_client_id", columnNames = {"conversation_id", "client_message_id"})
 })
 public class MessageEntity {
 
@@ -32,6 +34,12 @@ public class MessageEntity {
     @Column(nullable = false)
     private boolean deleted = false;
 
+    @Column(name = "reply_to_id")
+    private UUID replyToId;
+
+    @Column(name = "client_message_id", length = 64)
+    private String clientMessageId;
+
     @Column(nullable = false, updatable = false)
     private Instant createdAt = Instant.now();
 
@@ -45,6 +53,11 @@ public class MessageEntity {
         this.senderUsername = senderUsername;
         this.content = content;
         this.createdAt = Instant.now();
+    }
+
+    public MessageEntity(UUID conversationId, UUID senderId, String senderUsername, String content, UUID replyToId) {
+        this(conversationId, senderId, senderUsername, content);
+        this.replyToId = replyToId;
     }
 
     public UUID getId() { return id; }
@@ -67,6 +80,12 @@ public class MessageEntity {
 
     public boolean isDeleted() { return deleted; }
     public void setDeleted(boolean deleted) { this.deleted = deleted; }
+
+    public UUID getReplyToId() { return replyToId; }
+    public void setReplyToId(UUID replyToId) { this.replyToId = replyToId; }
+
+    public String getClientMessageId() { return clientMessageId; }
+    public void setClientMessageId(String clientMessageId) { this.clientMessageId = clientMessageId; }
 
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }

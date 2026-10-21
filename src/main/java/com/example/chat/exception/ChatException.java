@@ -33,6 +33,9 @@ public class ChatException extends RuntimeException {
     public static final String REQUEST_ALREADY_EXISTS = "REQUEST_ALREADY_EXISTS";
     public static final String REQUEST_NOT_FOUND = "REQUEST_NOT_FOUND";
     public static final String CANNOT_FRIEND_SELF = "CANNOT_FRIEND_SELF";
+    public static final String MESSAGE_NOT_FOUND = "MESSAGE_NOT_FOUND";
+    public static final String USER_BLOCKED = "USER_BLOCKED";
+    public static final String INVALID_REACTION = "INVALID_REACTION";
 
     private final String code;
 

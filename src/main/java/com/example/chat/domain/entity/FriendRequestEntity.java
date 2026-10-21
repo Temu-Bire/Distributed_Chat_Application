@@ -22,6 +22,9 @@ public class FriendRequestEntity {
     @Column(nullable = false, length = 20)
     private FriendRequestStatus status = FriendRequestStatus.PENDING;
 
+    @Column(length = 280)
+    private String message;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt = Instant.now();
 
@@ -36,6 +39,11 @@ public class FriendRequestEntity {
         this.status = FriendRequestStatus.PENDING;
         this.createdAt = Instant.now();
         this.updatedAt = Instant.now();
+    }
+
+    public FriendRequestEntity(UUID senderId, UUID receiverId, String message) {
+        this(senderId, receiverId);
+        this.message = message;
     }
 
     public UUID getId() {
@@ -65,6 +73,14 @@ public class FriendRequestEntity {
     public void setStatus(FriendRequestStatus status) {
         this.status = status;
         this.updatedAt = Instant.now();
+    }
+
+    public String getMessage() {
+        return message;
+    }
+
+    public void setMessage(String message) {
+        this.message = message;
     }
 
     public Instant getCreatedAt() {
