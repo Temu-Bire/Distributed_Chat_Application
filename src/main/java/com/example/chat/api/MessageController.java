@@ -5,6 +5,7 @@ import com.example.chat.application.PersistentMessageService;
 import com.example.chat.dto.auth.UserProfileResponse;
 import com.example.chat.dto.message.EditMessageDto;
 import com.example.chat.dto.message.PersistentMessageResponse;
+import com.example.chat.dto.message.PinDto;
 import com.example.chat.dto.message.ReactionDto;
 import com.example.chat.dto.message.SendMessageDto;
 import jakarta.validation.Valid;
@@ -76,5 +77,32 @@ public class MessageController {
             @Valid @RequestBody ReactionDto request) {
         UserProfileResponse user = authService.getCurrentUser(principal);
         return ResponseEntity.ok(messageService.toggleReaction(messageId, user.id(), request.emoji()));
+    }
+
+    @PutMapping("/api/messages/{messageId}/pin")
+    public ResponseEntity<PersistentMessageResponse> pinMessage(
+            Principal principal,
+            @PathVariable("messageId") UUID messageId,
+            @Valid @RequestBody PinDto request) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        return ResponseEntity.ok(messageService.setPinned(messageId, user.id(), request.pinned()));
+    }
+
+    @GetMapping("/api/conversations/{conversationId}/pinned")
+    public ResponseEntity<List<PersistentMessageResponse>> getPinned(
+            Principal principal,
+            @PathVariable("conversationId") UUID conversationId) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        return ResponseEntity.ok(messageService.getPinnedMessages(conversationId, user.id()));
+    }
+
+    @GetMapping("/api/conversations/{conversationId}/messages/search")
+    public ResponseEntity<List<PersistentMessageResponse>> searchMessages(
+            Principal principal,
+            @PathVariable("conversationId") UUID conversationId,
+            @RequestParam("q") String query,
+            @RequestParam(name = "limit", defaultValue = "25") int limit) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        return ResponseEntity.ok(messageService.searchMessages(conversationId, user.id(), query, limit));
     }
 }

@@ -35,7 +35,8 @@
         groupBlocked: [],
         directory: [],
         replyTo: null,
-        typingPeers: new Map()
+        typingPeers: new Map(),
+        pinned: []
     };
 
     const $ = (id) => document.getElementById(id);
@@ -397,6 +398,7 @@
         items.forEach((msg) => {
             const mine = state.user && msg.senderId === state.user.id;
             const row = el('div', 'msg-row ' + (mine ? 'msg-row--out' : 'msg-row--in'));
+            row.dataset.msgId = msg.id;
             const bubble = el('div', 'bubble ' + (mine ? 'bubble--out' : 'bubble--in'));
             if (!mine && isGroup(conv)) {
                 bubble.appendChild(el('small', 'bubble__author', msg.senderUsername || 'User'));
@@ -428,6 +430,10 @@
                 react.type = 'button';
                 react.addEventListener('click', () => openReactionPicker(row, msg));
                 actions.appendChild(react);
+                const pin = el('button', 'msg-action', msg.pinned ? 'Unpin' : 'Pin');
+                pin.type = 'button';
+                pin.addEventListener('click', () => togglePin(msg));
+                actions.appendChild(pin);
                 if (mine) {
                     const edit = el('button', 'msg-action', 'Edit');
                     edit.type = 'button';
@@ -449,6 +455,59 @@
 
     function isAdminConversation(conv) {
         return !!conv && (conv.myRole === 'OWNER' || conv.myRole === 'MODERATOR');
+    }
+
+    function renderPinnedBar() {
+        const bar = $('chat-pinned');
+        while (bar.firstChild) bar.removeChild(bar.firstChild);
+        if (!state.pinned.length) {
+            bar.hidden = true;
+            return;
+        }
+        bar.hidden = false;
+        state.pinned.slice(0, 3).forEach((msg) => {
+            const line = el('div', 'pinned-bar__row');
+            const label = el('button', 'pinned-bar__label', 'Pinned: ' + (msg.deleted ? 'deleted message' : msg.content));
+            label.type = 'button';
+            label.addEventListener('click', () => {
+                const target = document.querySelector('#chat-messages [data-msg-id="' + msg.id + '"]');
+                if (target) {
+                    target.scrollIntoView({ block: 'center' });
+                    target.classList.add('msg-row--flash');
+                    setTimeout(() => target.classList.remove('msg-row--flash'), 1600);
+                }
+            });
+            line.appendChild(label);
+            const unpin = el('button', 'pill pill-mute', 'Unpin');
+            unpin.type = 'button';
+            unpin.addEventListener('click', () => togglePin(Object.assign({}, msg, { pinned: false })));
+            line.appendChild(unpin);
+            bar.appendChild(line);
+        });
+    }
+
+    async function loadPinned(conversationId) {
+        try {
+            state.pinned = await request('/conversations/' + conversationId + '/pinned');
+        } catch (err) {
+            state.pinned = [];
+        }
+        if (state.currentConversation && String(state.currentConversation.id) === String(conversationId)) {
+            renderPinnedBar();
+        }
+    }
+
+    async function togglePin(msg) {
+        try {
+            const updated = await request('/messages/' + msg.id + '/pin', {
+                method: 'PUT',
+                body: JSON.stringify({ pinned: !msg.pinned })
+            });
+            upsertMessage(updated);
+            await loadPinned(updated.conversationId);
+        } catch (err) {
+            toast(err.message);
+        }
     }
 
     let lastTypingSentAt = 0;
@@ -635,6 +694,9 @@
         renderConversations();
         subscribeConversation(id);
         clearReply();
+        state.pinned = [];
+        renderPinnedBar();
+        loadPinned(id);
         if (isGroup(conv) && !conv.myRole) {
             try {
                 const members = await request('/conversations/' + id + '/members');
@@ -1433,6 +1495,11 @@
                 removeMessage(frame.data && frame.data.conversationId, frame.data && frame.data.messageId);
             } else if (frame.event === 'TYPING') {
                 recordTyping(frame.conversationId, frame.data && frame.data.username, frame.data && frame.data.typing);
+            } else if (frame.event === 'MESSAGE_PINNED') {
+                upsertMessage(frame.data);
+                if (state.currentConversation && String(frame.conversationId) === String(state.currentConversation.id)) {
+                    loadPinned(frame.conversationId);
+                }
             }
         });
         state.subscriptions.set(id, dest);

@@ -13,6 +13,7 @@ public record PersistentMessageResponse(
     String content,
     boolean edited,
     boolean deleted,
+    boolean pinned,
     UUID replyToId,
     String replyToContent,
     List<ReactionSummaryDto> reactions,
@@ -28,6 +29,7 @@ public record PersistentMessageResponse(
             msg.getContent(),
             msg.isEdited(),
             msg.isDeleted(),
+            msg.isPinned(),
             msg.getReplyToId(),
             null,
             List.of(),
@@ -39,14 +41,14 @@ public record PersistentMessageResponse(
     public PersistentMessageResponse withReplyPreview(String preview) {
         return new PersistentMessageResponse(
             id, conversationId, senderId, senderUsername, content,
-            edited, deleted, replyToId, preview, reactions, createdAt, editedAt
+            edited, deleted, pinned, replyToId, preview, reactions, createdAt, editedAt
         );
     }
 
     public PersistentMessageResponse withReactions(List<ReactionSummaryDto> newReactions) {
         return new PersistentMessageResponse(
             id, conversationId, senderId, senderUsername, content,
-            edited, deleted, replyToId, replyToContent, newReactions, createdAt, editedAt
+            edited, deleted, pinned, replyToId, replyToContent, newReactions, createdAt, editedAt
         );
     }
 }

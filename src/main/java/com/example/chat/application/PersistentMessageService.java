@@ -2,6 +2,7 @@ package com.example.chat.application;
 
 import com.example.chat.domain.entity.ConversationEntity;
 import com.example.chat.domain.entity.ConversationMemberEntity;
+import com.example.chat.domain.entity.ConversationType;
 import com.example.chat.domain.entity.MemberRole;
 import com.example.chat.domain.entity.MessageEntity;
 import com.example.chat.domain.entity.MessageReactionEntity;
@@ -249,6 +250,72 @@ public class PersistentMessageService {
         return response;
     }
 
+    /**
+     * Pin or unpin a message. Groups restrict pinning to owner/admin/moderator
+     * (a pinned banner is a shared surface, plain members must not edit it);
+     * direct chats let either member pin. Unpinning follows the same rule as
+     * deleting: sender or group manager.
+     */
+    @Transactional
+    public PersistentMessageResponse setPinned(UUID messageId, UUID currentUserId, boolean pinned) {
+        MessageEntity message = messageRepository.findByIdForUpdate(messageId)
+            .orElseThrow(() -> new ChatException(ChatException.MESSAGE_NOT_FOUND, "Message not found"));
+
+        if (message.isDeleted()) {
+            throw new ChatException(ChatException.INVALID_COMMAND, "Cannot pin a deleted message");
+        }
+
+        ConversationMemberEntity member = memberRepository.findByConversationIdAndUserId(message.getConversationId(), currentUserId)
+            .orElseThrow(() -> new ChatException(ChatException.NOT_MEMBER, "You are not a member of this conversation"));
+        ConversationEntity conv = conversationRepository.findById(message.getConversationId())
+            .orElseThrow(() -> new ChatException(ChatException.CONVERSATION_NOT_FOUND, "Conversation not found"));
+
+        boolean isManager = member.getRole() == MemberRole.OWNER || member.getRole() == MemberRole.MODERATOR;
+        boolean isSender = message.getSenderId().equals(currentUserId);
+        if (conv.getType() == ConversationType.GROUP && pinned && !isManager) {
+            throw new ChatException(ChatException.FORBIDDEN, "Only group admins or moderators can pin messages");
+        }
+        if (conv.getType() == ConversationType.GROUP && !pinned && !isManager && !isSender) {
+            throw new ChatException(ChatException.FORBIDDEN, "Only group admins or moderators can unpin this message");
+        }
+
+        message.setPinned(pinned);
+        message.setPinnedBy(pinned ? currentUserId : null);
+        message.setPinnedAt(pinned ? Instant.now() : null);
+        message = messageRepository.save(message);
+
+        PersistentMessageResponse response = enrich(message);
+        broadcastConversationEvent(message.getConversationId(), "MESSAGE_PINNED", response);
+        return response;
+    }
+
+    @Transactional(readOnly = true)
+    public List<PersistentMessageResponse> getPinnedMessages(UUID conversationId, UUID currentUserId) {
+        memberRepository.findByConversationIdAndUserId(conversationId, currentUserId)
+            .orElseThrow(() -> new ChatException(ChatException.NOT_MEMBER, "You are not a member of this conversation"));
+        List<MessageEntity> pinned = messageRepository
+            .findPinned(conversationId, PageRequest.of(0, 20)).getContent();
+        return pinned.stream().map(this::enrich).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<PersistentMessageResponse> searchMessages(UUID conversationId, UUID currentUserId, String query, int limit) {
+        if (query == null || query.trim().isEmpty()) {
+            return List.of();
+        }
+        String trimmed = query.trim();
+        if (trimmed.length() > 100) {
+            throw new ChatException(ChatException.INVALID_COMMAND, "Search query must be at most 100 characters");
+        }
+        memberRepository.findByConversationIdAndUserId(conversationId, currentUserId)
+            .orElseThrow(() -> new ChatException(ChatException.NOT_MEMBER, "You are not a member of this conversation"));
+        int boundedLimit = Math.clamp(limit, 1, 50);
+        String escaped = trimmed.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+        List<MessageEntity> found = messageRepository
+            .searchContent(conversationId, escaped, PageRequest.of(0, boundedLimit)).getContent();
+        return found.stream().map(this::enrich).toList();
+    }
+
     /** Message + reply preview + aggregated reactions, in one view. */
     private PersistentMessageResponse enrich(MessageEntity message) {
         String replyPreview = null;
@@ -267,6 +334,7 @@ public class PersistentMessageService {
             message.getContent(),
             message.isEdited(),
             message.isDeleted(),
+            message.isPinned(),
             message.getReplyToId(),
             replyPreview,
             reactionSummaries(List.of(message.getId())).getOrDefault(message.getId(), List.of()),

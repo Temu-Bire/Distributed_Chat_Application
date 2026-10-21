@@ -326,6 +326,44 @@ ul { list-style: none; }
 
 .typing-bar { color: var(--sub); font-size: 12px; padding: 4px 16px 0; }
 
+.pinned-bar {
+    padding: 6px 16px;
+    border-bottom: 1px solid var(--line);
+    background: var(--muted-bg);
+    display: grid;
+    gap: 4px;
+}
+.pinned-bar__row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+.pinned-bar__label {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: left;
+    background: none;
+    border: 0;
+    padding: 0;
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+.pinned-bar__label::before { content: "\1F4CC"; margin-right: 6px; }
+.msg-row--flash { animation: msg-flash 1.6s ease; }
+@keyframes msg-flash {
+    0%, 60% { background: rgba(255, 214, 102, .35); }
+    100% { background: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .msg-row--flash { animation: none; }
+}
+
 .loading-row { opacity: .75; }
 .loading-row::after {
     content: "";
