@@ -40,6 +40,7 @@
         search: { open: false, query: '', results: null, conversationId: null, timer: null },
         pages: {},
         pendingAttachment: null,
+        inviteLinks: [],
         notifications: [],
         unreadNotifications: 0,
         soundEnabled: true
@@ -1352,11 +1353,17 @@
             });
 
             $('add-member-btn').hidden = !isAdmin;
-            document.querySelectorAll('.group-menu__item[data-gtab="requests"], .group-menu__item[data-gtab="invitations"], .group-menu__item[data-gtab="blocked"]')
+            document.querySelectorAll('.group-menu__item[data-gtab="requests"], .group-menu__item[data-gtab="invitations"], .group-menu__item[data-gtab="blocked"], .group-menu__item[data-gtab="links"]')
                 .forEach((item) => { item.hidden = !isAdmin; });
             if (!isAdmin) switchGroupTab('info');
 
             if (isAdmin) {
+                try {
+                    state.inviteLinks = await request('/conversations/groups/' + conv.id + '/invite-links');
+                } catch (err) {
+                    state.inviteLinks = [];
+                }
+                renderInviteLinks(conv.id);
                 try {
                     const joinRequests = await request('/conversations/groups/' + conv.id + '/join-requests');
                     const invitations = await request('/conversations/groups/' + conv.id + '/invitations');
@@ -1387,6 +1394,206 @@
         } catch (err) {
             toast(err.message);
         }
+    }
+
+    async function loadInviteLinks(groupId) {
+        try {
+            state.inviteLinks = await request('/conversations/groups/' + groupId + '/invite-links');
+        } catch (err) {
+            state.inviteLinks = [];
+            toast(err.message);
+        }
+        renderInviteLinks(groupId);
+    }
+
+    function renderInviteLinks(groupId) {
+        const list = $('invite-links-list');
+        while (list.firstChild) list.removeChild(list.firstChild);
+        const links = (state.inviteLinks || []).filter((link) => String(link.groupId) === String(groupId));
+        if (!links.length) {
+            list.appendChild(el('div', 'empty', 'No invite links yet'));
+            return;
+        }
+        links.forEach((link) => {
+            const row = el('div', 'link-row' + (link.active ? '' : ' is-spent'));
+            const url = location.origin + link.joinUrl;
+            const field = el('input');
+            field.type = 'text';
+            field.readOnly = true;
+            field.value = url;
+            field.setAttribute('aria-label', 'Invite link for ' + link.groupTitle);
+            row.appendChild(field);
+            row.appendChild(el('div', 'muted link-row__meta', describeLink(link)));
+
+            const actions = el('div', 'link-row__actions');
+            const copy = el('button', 'pill pill-ok', 'Copy');
+            copy.type = 'button';
+            copy.addEventListener('click', () => copyInviteLink(url, field));
+            actions.appendChild(copy);
+            if (link.active) {
+                const revoke = el('button', 'pill pill-no', 'Revoke');
+                revoke.type = 'button';
+                revoke.addEventListener('click', async () => {
+                    try {
+                        await request('/conversations/groups/' + groupId + '/invite-links/' + link.id, { method: 'DELETE' });
+                        toast('Invite link revoked');
+                        loadInviteLinks(groupId);
+                    } catch (err) {
+                        toast(err.message);
+                    }
+                });
+                actions.appendChild(revoke);
+            } else {
+                actions.appendChild(el('span', 'pill pill-mute', 'Spent'));
+            }
+            row.appendChild(actions);
+            list.appendChild(row);
+        });
+    }
+
+    function describeLink(link) {
+        const uses = link.maxUses == null
+            ? 'unlimited uses'
+            : Math.max(0, link.maxUses - link.usedCount) + ' of ' + link.maxUses + ' uses left';
+        const life = link.expiresAt
+            ? 'expires ' + new Date(link.expiresAt).toLocaleString()
+            : 'never expires';
+        return uses + ' · ' + life;
+    }
+
+    async function copyInviteLink(url, field) {
+        try {
+            await navigator.clipboard.writeText(url);
+            toast('Invite link copied');
+        } catch (err) {
+            // The clipboard API needs a secure context and a user gesture;
+            // when it refuses, leaving the text selected still lets a person copy.
+            field.select();
+            toast('Press Ctrl+C to copy the highlighted link');
+        }
+    }
+
+    async function createInviteLink(groupId) {
+        const minutes = positiveIntInput($('invite-expiry-input'));
+        const maxUses = positiveIntInput($('invite-uses-input'));
+        const body = {};
+        if (minutes) body.expiresInSeconds = minutes * 60;
+        if (maxUses) body.maxUses = maxUses;
+        try {
+            await withBusy($('invite-link-create-btn'), async () => {
+                const link = await request('/conversations/groups/' + groupId + '/invite-links', {
+                    method: 'POST',
+                    body: JSON.stringify(body)
+                });
+                state.inviteLinks = [link].concat(state.inviteLinks || []);
+            });
+            $('invite-expiry-input').value = '';
+            $('invite-uses-input').value = '';
+            renderInviteLinks(groupId);
+        } catch (err) {
+            toast(err.message);
+        }
+    }
+
+    function positiveIntInput(input) {
+        const value = parseInt(input.value, 10);
+        return Number.isFinite(value) && value > 0 ? value : null;
+    }
+
+    /** Accepts a bare token, a full URL or the {@code #join/token} form. */
+    function tokenFromInviteText(raw) {
+        const match = (raw || '').toLowerCase().match(/[0-9a-f]{32}/);
+        return match ? match[0] : null;
+    }
+
+    async function joinFromInviteInput() {
+        const input = $('invite-join-input');
+        const token = tokenFromInviteText(input.value);
+        if (!token) {
+            toast('That does not look like an invite link');
+            return;
+        }
+        input.value = '';
+        await previewInviteToken(token);
+    }
+
+    async function previewInviteToken(token) {
+        let preview;
+        try {
+            preview = await request('/conversations/invite-links/preview', {
+                method: 'POST',
+                body: JSON.stringify({ token: token })
+            });
+        } catch (err) {
+            toast(err.message);
+            return;
+        }
+        if (preview.state === 'INVALID') {
+            toast('That invite link is not valid any more');
+            return;
+        }
+        if (preview.state === 'BLOCKED') {
+            toast('You cannot join this group');
+            return;
+        }
+        if (preview.state === 'ALREADY_MEMBER') {
+            await loadConversations();
+            openView('chats', { conversationId: preview.groupId });
+            return;
+        }
+        openInvitePreview(token, preview);
+    }
+
+    function openInvitePreview(token, preview) {
+        const { body, actions } = openModal('Join this group?');
+        const card = el('div', 'card-row');
+        const avatar = el('div', 'avatar');
+        setAvatar(avatar, preview.title, preview.avatarUrl);
+        const text = el('div');
+        text.appendChild(el('strong', '', preview.title));
+        text.appendChild(el('span', 'muted', preview.memberCount + ' members'));
+        card.appendChild(avatar);
+        card.appendChild(text);
+        body.appendChild(card);
+        if (preview.description) {
+            body.appendChild(el('p', 'muted', preview.description));
+        }
+        const join = el('button', 'btn btn-primary btn-sm', 'Join group');
+        join.type = 'button';
+        join.addEventListener('click', async () => {
+            try {
+                const conv = await withBusy(join, async () => {
+                    const result = await request('/conversations/invite-links/join', {
+                        method: 'POST',
+                        body: JSON.stringify({ token: token })
+                    });
+                    await loadConversations();
+                    return result;
+                });
+                closeModal();
+                toast('You joined ' + (conv.title || 'the group'));
+                openView('chats', { conversationId: conv.id });
+            } catch (err) {
+                toast(err.message);
+            }
+        });
+        const cancel = el('button', 'btn btn-ghost btn-sm', 'Cancel');
+        cancel.type = 'button';
+        cancel.addEventListener('click', closeModal);
+        actions.appendChild(cancel);
+        actions.appendChild(join);
+    }
+
+    /**
+     * An invite link is a capability, so it should not linger in the address
+     * bar (or the history) once it has been used: read it, then drop it.
+     */
+    function handleInviteHash() {
+        const match = location.hash.match(/^#join\/(.+)$/);
+        if (!match) return;
+        history.replaceState(null, '', location.pathname + location.search);
+        const token = tokenFromInviteText(match[1]);
+        if (token) previewInviteToken(token);
     }
 
     function renderGroupBlocked() {
@@ -2088,6 +2295,21 @@
                 loadDiscoverGroups();
             }
         });
+        $('invite-join-btn').addEventListener('click', joinFromInviteInput);
+        $('invite-join-input').addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                joinFromInviteInput();
+            }
+        });
+        $('invite-link-create-btn').addEventListener('click', () => {
+            const conv = state.currentConversation;
+            if (!conv || !isGroup(conv)) {
+                toast('Open a group chat first');
+                return;
+            }
+            createInviteLink(conv.id);
+        });
         $('modal-close').addEventListener('click', closeModal);
         $('modal-backdrop').addEventListener('click', closeModal);
         $('add-member-btn').addEventListener('click', openAddMemberModal);
@@ -2440,6 +2662,7 @@
         showApp();
         await loadInitial();
         connectWebSocket();
+        handleInviteHash();
     }
 
     async function init() {
@@ -2448,6 +2671,11 @@
         setupNavigation();
         setupChat();
         setupSettings();
+        // Someone already inside the app can paste an invite link and hit
+        // enter in the address bar; that arrives as a hash change, not a load.
+        window.addEventListener('hashchange', () => {
+            if (state.user) handleInviteHash();
+        });
         try {
             await bootAuthenticated();
         } catch (e) {

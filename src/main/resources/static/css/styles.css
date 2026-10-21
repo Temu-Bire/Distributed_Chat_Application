@@ -332,6 +332,26 @@ ul { list-style: none; }
 .notif-row strong { display: block; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .notif-row span { font-size: 12px; }
 
+.field-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 12px;
+    margin-top: 14px;
+}
+
+.link-row {
+    display: grid;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+}
+.link-row input { width: 100%; font-size: 12px; }
+.link-row__meta { font-size: 12px; }
+.link-row__actions { display: flex; gap: 8px; }
+.link-row.is-spent { opacity: 0.55; }
+
 .empty { color: var(--sub); padding: 24px; text-align: center; }
 
 .typing-bar { color: var(--sub); font-size: 12px; padding: 4px 16px 0; }

@@ -3,16 +3,21 @@ package com.example.chat.api;
 import com.example.chat.application.AuthService;
 import com.example.chat.application.ConversationService;
 import com.example.chat.application.GroupInvitationService;
+import com.example.chat.application.GroupInviteLinkService;
 import com.example.chat.application.GroupJoinRequestService;
 import com.example.chat.application.PersistentMessageService;
 import com.example.chat.dto.auth.UserProfileResponse;
 import com.example.chat.dto.conversation.*;
 import com.example.chat.dto.group.BlockedUserResponse;
 import com.example.chat.dto.group.BlockUserRequest;
+import com.example.chat.dto.group.CreateInviteLinkRequest;
 import com.example.chat.dto.group.GroupDiscoveryResponse;
 import com.example.chat.dto.group.GroupInvitationResponse;
+import com.example.chat.dto.group.GroupInviteLinkResponse;
 import com.example.chat.dto.group.GroupJoinRequestResponse;
+import com.example.chat.dto.group.InvitePreviewResponse;
 import com.example.chat.dto.group.InviteToGroupRequest;
+import com.example.chat.dto.group.JoinByLinkRequest;
 import com.example.chat.domain.entity.MemberRole;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.PageRequest;
@@ -35,17 +40,20 @@ public class ConversationController {
     private final AuthService authService;
     private final GroupJoinRequestService groupJoinRequestService;
     private final GroupInvitationService groupInvitationService;
+    private final GroupInviteLinkService groupInviteLinkService;
 
     public ConversationController(ConversationService conversationService,
                                     PersistentMessageService messageService,
                                     AuthService authService,
                                     GroupJoinRequestService groupJoinRequestService,
-                                    GroupInvitationService groupInvitationService) {
+                                    GroupInvitationService groupInvitationService,
+                                    GroupInviteLinkService groupInviteLinkService) {
         this.conversationService = conversationService;
         this.messageService = messageService;
         this.authService = authService;
         this.groupJoinRequestService = groupJoinRequestService;
         this.groupInvitationService = groupInvitationService;
+        this.groupInviteLinkService = groupInviteLinkService;
     }
 
     @GetMapping
@@ -309,5 +317,54 @@ public class ConversationController {
             @PathVariable("id") UUID groupId) {
         UserProfileResponse user = authService.getCurrentUser(principal);
         return ResponseEntity.ok(groupInvitationService.getGroupInvitations(groupId, user.id()));
+    }
+
+    @PostMapping("/groups/{id}/invite-links")
+    public ResponseEntity<GroupInviteLinkResponse> createInviteLink(
+            Principal principal,
+            @PathVariable("id") UUID groupId,
+            @Valid @RequestBody(required = false) CreateInviteLinkRequest request) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        GroupInviteLinkResponse response = groupInviteLinkService.create(user.id(), groupId, request);
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+
+    @GetMapping("/groups/{id}/invite-links")
+    public ResponseEntity<List<GroupInviteLinkResponse>> listInviteLinks(
+            Principal principal,
+            @PathVariable("id") UUID groupId) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        return ResponseEntity.ok(groupInviteLinkService.listActive(user.id(), groupId));
+    }
+
+    @DeleteMapping("/groups/{id}/invite-links/{linkId}")
+    public ResponseEntity<Map<String, String>> revokeInviteLink(
+            Principal principal,
+            @PathVariable("id") UUID groupId,
+            @PathVariable("linkId") UUID linkId) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        groupInviteLinkService.revoke(user.id(), groupId, linkId);
+        return ResponseEntity.ok(Map.of("message", "Invite link revoked"));
+    }
+
+    /**
+     * The token travels in the body, not the query string: a link is a
+     * capability, and URLs are the part of a request that ends up in logs.
+     */
+    @PostMapping("/invite-links/preview")
+    public ResponseEntity<InvitePreviewResponse> previewInviteLink(
+            Principal principal,
+            @Valid @RequestBody JoinByLinkRequest request) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        return ResponseEntity.ok(groupInviteLinkService.preview(user.id(), request.token()));
+    }
+
+    @PostMapping("/invite-links/join")
+    public ResponseEntity<ConversationSummaryResponse> joinByInviteLink(
+            Principal principal,
+            @Valid @RequestBody JoinByLinkRequest request) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        UUID groupId = groupInviteLinkService.join(user.id(), request.token());
+        return ResponseEntity.ok(conversationService.getConversationDetails(groupId, user.id()));
     }
 }

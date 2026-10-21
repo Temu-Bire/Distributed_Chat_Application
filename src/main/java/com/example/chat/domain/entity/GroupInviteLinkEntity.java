@@ -49,11 +49,15 @@ public class GroupInviteLinkEntity {
         this.createdAt = Instant.now();
     }
 
-    public boolean isActive() {
+    /**
+     * Whether this link still admits members at {@code now}. The instant is a
+     * parameter rather than {@code Instant.now()} so expiry is checkable
+     * without waiting for a clock to roll over.
+     */
+    public boolean isActiveAt(Instant now) {
         if (revoked) return false;
-        if (expiresAt != null && Instant.now().isAfter(expiresAt)) return false;
-        if (maxUses != null && usedCount >= maxUses) return false;
-        return true;
+        if (expiresAt != null && !now.isBefore(expiresAt)) return false;
+        return maxUses == null || usedCount < maxUses;
     }
 
     public UUID getId() { return id; }

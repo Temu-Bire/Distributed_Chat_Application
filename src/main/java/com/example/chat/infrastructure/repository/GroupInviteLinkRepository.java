@@ -17,6 +17,15 @@ public interface GroupInviteLinkRepository extends JpaRepository<GroupInviteLink
 
     Optional<GroupInviteLinkEntity> findByToken(String token);
 
+    /**
+     * Token to group id, without loading the link. {@code join} needs the
+     * group row locked before it reads the link, and reading the entity here
+     * would park a stale copy in the session that the later locked read then
+     * hands back instead of fresh counter values.
+     */
+    @Query("SELECT l.groupId FROM GroupInviteLinkEntity l WHERE l.token = :token")
+    Optional<UUID> findGroupIdByToken(@Param("token") String token);
+
     /** Row lock so two joins through the same link cannot both consume the last use. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT l FROM GroupInviteLinkEntity l WHERE l.token = :token")

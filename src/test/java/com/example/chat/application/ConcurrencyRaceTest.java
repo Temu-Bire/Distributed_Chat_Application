@@ -6,9 +6,12 @@ import com.example.chat.dto.auth.UserProfileResponse;
 import com.example.chat.dto.conversation.ConversationSummaryResponse;
 import com.example.chat.dto.conversation.AddMemberRequest;
 import com.example.chat.dto.conversation.CreateGroupRequest;
+import com.example.chat.dto.group.CreateInviteLinkRequest;
+import com.example.chat.dto.group.GroupInviteLinkResponse;
 import com.example.chat.dto.message.PersistentMessageResponse;
 import com.example.chat.exception.ChatException;
 import com.example.chat.infrastructure.repository.ConversationMemberRepository;
+import com.example.chat.infrastructure.repository.GroupInviteLinkRepository;
 import com.example.chat.infrastructure.repository.GroupJoinRequestRepository;
 import com.example.chat.infrastructure.repository.MessageRepository;
 import com.example.chat.infrastructure.repository.MessageReactionRepository;
@@ -21,6 +24,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -48,11 +52,13 @@ class ConcurrencyRaceTest {
     @Autowired private PersistentMessageService messageService;
     @Autowired private ConversationService conversationService;
     @Autowired private GroupJoinRequestService groupJoinRequestService;
+    @Autowired private GroupInviteLinkService inviteLinkService;
     @Autowired private AuthService authService;
     @Autowired private MessageRepository messageRepository;
     @Autowired private ConversationMemberRepository memberRepository;
     @Autowired private MessageReactionRepository reactionRepository;
     @Autowired private GroupJoinRequestRepository groupJoinRequestRepository;
+    @Autowired private GroupInviteLinkRepository linkRepository;
 
     @Test
     @DisplayName("eight concurrent sends with one clientMessageId persist exactly one message")
@@ -206,6 +212,48 @@ class ConcurrencyRaceTest {
         assertThat(membershipRows).isEqualTo(1);
         assertThat(groupJoinRequestRepository.findById(requestId).orElseThrow().getStatus())
             .isEqualTo(com.example.chat.domain.entity.GroupJoinRequestStatus.ACCEPTED);
+    }
+
+    @Test
+    @DisplayName("two visitors arriving on the last use of one link: exactly one gets in")
+    void inviteLinkLastUseRace() throws Exception {
+        UserProfileResponse owner = user("race4-owner");
+        UserProfileResponse guestA = user("race4-guest-a");
+        UserProfileResponse guestB = user("race4-guest-b");
+        ConversationSummaryResponse group = conversationService.createGroup(owner.id(),
+            new CreateGroupRequest("Race group 4", "one use left", null, List.of(), false));
+        GroupInviteLinkResponse link = inviteLinkService.create(owner.id(), group.id(),
+            new CreateInviteLinkRequest(null, 1));
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        CountDownLatch start = new CountDownLatch(1);
+        List<UUID> admitted = new ArrayList<>();
+        try {
+            Future<UUID> a = pool.submit(() -> {
+                start.await();
+                return inviteLinkService.join(guestA.id(), link.token());
+            });
+            Future<UUID> b = pool.submit(() -> {
+                start.await();
+                return inviteLinkService.join(guestB.id(), link.token());
+            });
+            start.countDown();
+            for (Future<UUID> future : List.of(a, b)) {
+                try {
+                    admitted.add(future.get(20, TimeUnit.SECONDS));
+                } catch (ExecutionException refused) {
+                    // The loser re-reads the link under the row lock and finds
+                    // the budget already spent.
+                    assertThat(refused.getCause()).isInstanceOf(ChatException.class);
+                }
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(admitted).as("one use, one member").hasSize(1);
+        assertThat(memberRepository.findByConversationId(group.id())).hasSize(2);
+        assertThat(linkRepository.findById(link.id()).orElseThrow().getUsedCount()).isEqualTo(1);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
