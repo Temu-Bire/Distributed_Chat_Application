@@ -405,6 +405,9 @@
             if (!mine && isGroup(conv)) {
                 bubble.appendChild(el('small', 'bubble__author', msg.senderUsername || 'User'));
             }
+            if (msg.forwarded && !msg.deleted) {
+                bubble.appendChild(el('div', 'bubble__forwarded', 'Forwarded'));
+            }
             if (msg.replyToContent) {
                 bubble.appendChild(el('div', 'bubble__reply', '↳ ' + msg.replyToContent));
             }
@@ -436,6 +439,10 @@
                 pin.type = 'button';
                 pin.addEventListener('click', () => togglePin(msg));
                 actions.appendChild(pin);
+                const forward = el('button', 'msg-action', 'Forward');
+                forward.type = 'button';
+                forward.addEventListener('click', () => openForwardModal(msg));
+                actions.appendChild(forward);
                 if (mine) {
                     const edit = el('button', 'msg-action', 'Edit');
                     edit.type = 'button';
@@ -612,6 +619,45 @@
             });
             upsertMessage(updated);
             await loadPinned(updated.conversationId);
+        } catch (err) {
+            toast(err.message);
+        }
+    }
+
+    function openForwardModal(msg) {
+        const { body } = openModal('Forward message to');
+        const list = el('div', 'card-list');
+        body.appendChild(list);
+        const conversations = state.conversations || [];
+        const sameConversation = (conv) => state.currentConversation
+            && String(conv.id) === String(state.currentConversation.id);
+        if (!conversations.length) {
+            list.appendChild(el('div', 'empty', 'No conversations yet'));
+        }
+        conversations.forEach((conv) => {
+            const item = el('button', 'card-row');
+            item.type = 'button';
+            item.appendChild(el('strong', '', convTitle(conv) + (sameConversation(conv) ? ' (this chat)' : '')));
+            item.addEventListener('click', () => {
+                closeModal();
+                forwardMessageTo(msg, conv);
+            });
+            list.appendChild(item);
+        });
+    }
+
+    async function forwardMessageTo(msg, conv) {
+        try {
+            const created = await request('/conversations/' + conv.id + '/messages/forward', {
+                method: 'POST',
+                body: JSON.stringify({ messageId: msg.id, clientMessageId: generateClientMessageId() })
+            });
+            state.messages.set(conv.id, (state.messages.get(conv.id) || []).concat([created]));
+            toast('Forwarded to ' + convTitle(conv));
+            if (state.currentConversation && String(state.currentConversation.id) === String(conv.id)) {
+                renderMessages();
+            }
+            renderConversations();
         } catch (err) {
             toast(err.message);
         }

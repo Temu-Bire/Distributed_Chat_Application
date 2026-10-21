@@ -15,6 +15,7 @@ public record PersistentMessageResponse(
     boolean deleted,
     boolean pinned,
     int readByCount,
+    boolean forwarded,
     UUID replyToId,
     String replyToContent,
     List<ReactionSummaryDto> reactions,
@@ -32,6 +33,7 @@ public record PersistentMessageResponse(
             msg.isDeleted(),
             msg.isPinned(),
             0,
+            false,
             msg.getReplyToId(),
             null,
             List.of(),
@@ -43,14 +45,14 @@ public record PersistentMessageResponse(
     public PersistentMessageResponse withReplyPreview(String preview) {
         return new PersistentMessageResponse(
             id, conversationId, senderId, senderUsername, content,
-            edited, deleted, pinned, readByCount, replyToId, preview, reactions, createdAt, editedAt
+            edited, deleted, pinned, readByCount, forwarded, replyToId, preview, reactions, createdAt, editedAt
         );
     }
 
     public PersistentMessageResponse withReactions(List<ReactionSummaryDto> newReactions) {
         return new PersistentMessageResponse(
             id, conversationId, senderId, senderUsername, content,
-            edited, deleted, pinned, readByCount, replyToId, replyToContent, newReactions, createdAt, editedAt
+            edited, deleted, pinned, readByCount, forwarded, replyToId, replyToContent, newReactions, createdAt, editedAt
         );
     }
 }

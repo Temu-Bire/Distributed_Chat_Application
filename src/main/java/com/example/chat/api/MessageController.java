@@ -4,6 +4,7 @@ import com.example.chat.application.AuthService;
 import com.example.chat.application.PersistentMessageService;
 import com.example.chat.dto.auth.UserProfileResponse;
 import com.example.chat.dto.message.EditMessageDto;
+import com.example.chat.dto.message.ForwardMessageDto;
 import com.example.chat.dto.message.PersistentMessageResponse;
 import com.example.chat.dto.message.PinDto;
 import com.example.chat.dto.message.ReactionDto;
@@ -48,6 +49,18 @@ public class MessageController {
         PersistentMessageResponse response = messageService.sendMessage(
             conversationId, user.id(), user.username(), request.content(),
             request.replyToId(), request.clientMessageId()
+        );
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+
+    @PostMapping("/api/conversations/{conversationId}/messages/forward")
+    public ResponseEntity<PersistentMessageResponse> forwardMessage(
+            Principal principal,
+            @PathVariable("conversationId") UUID conversationId,
+            @Valid @RequestBody ForwardMessageDto request) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        PersistentMessageResponse response = messageService.forwardMessage(
+            conversationId, user.id(), user.username(), request.messageId(), request.clientMessageId()
         );
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }

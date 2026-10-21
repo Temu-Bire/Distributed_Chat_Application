@@ -65,6 +65,37 @@ public class PersistentMessageService {
     @Transactional
     public PersistentMessageResponse sendMessage(UUID conversationId, UUID senderId, String senderUsername, String content,
                                                  UUID replyToId, String clientMessageId) {
+        return sendMessage(conversationId, senderId, senderUsername, content, replyToId, clientMessageId, null);
+    }
+
+    /**
+     * Forward a copy of an existing message into another conversation. The
+     * destination member check is implicit (sendMessage rejects non-members);
+     * the source membership check is explicit because forwards must not leak
+     * messages from a conversation the sender has left or never joined.
+     */
+    @Transactional
+    public PersistentMessageResponse forwardMessage(UUID destinationId, UUID currentUserId, String username,
+                                                    UUID sourceMessageId, String clientMessageId) {
+        MessageEntity source = messageRepository.findById(sourceMessageId)
+            .orElseThrow(() -> new ChatException(ChatException.MESSAGE_NOT_FOUND, "The message you tried to forward no longer exists"));
+
+        if (source.isDeleted()) {
+            throw new ChatException(ChatException.INVALID_COMMAND, "Cannot forward a deleted message");
+        }
+        memberRepository.findByConversationIdAndUserId(source.getConversationId(), currentUserId)
+            .orElseThrow(() -> new ChatException(ChatException.NOT_MEMBER, "You are not a member of the source conversation"));
+        if (source.getConversationId().equals(destinationId)) {
+            throw new ChatException(ChatException.INVALID_COMMAND, "This message is already in that conversation");
+        }
+
+        return sendMessage(destinationId, currentUserId, username, source.getContent(),
+            null, clientMessageId, sourceMessageId);
+    }
+
+    @Transactional
+    public PersistentMessageResponse sendMessage(UUID conversationId, UUID senderId, String senderUsername, String content,
+                                                 UUID replyToId, String clientMessageId, UUID forwardedFromId) {
         if (content == null || content.trim().isEmpty()) {
             throw new ChatException(ChatException.INVALID_MESSAGE, "Message content cannot be blank");
         }
@@ -116,6 +147,7 @@ public class PersistentMessageService {
 
         MessageEntity message = new MessageEntity(conversationId, senderId, senderUsername, content.trim(), replyToId);
         message.setClientMessageId(normalizedClientId);
+        message.setForwardedFromId(forwardedFromId);
         message = messageRepository.save(message);
 
         // Update conversation summary
@@ -362,6 +394,7 @@ public class PersistentMessageService {
             message.isDeleted(),
             message.isPinned(),
             readByCount,
+            message.getForwardedFromId() != null,
             message.getReplyToId(),
             replyPreview,
             reactionSummaries(List.of(message.getId())).getOrDefault(message.getId(), List.of()),
