@@ -356,6 +356,7 @@ ul { list-style: none; }
 }
 .pinned-bar__label::before { content: "\1F4CC"; margin-right: 6px; }
 .msg-row--flash { animation: msg-flash 1.6s ease; }
+.ticks { opacity: .55; margin-left: 6px; letter-spacing: -2px; }
 @keyframes msg-flash {
     0%, 60% { background: rgba(255, 214, 102, .35); }
     100% { background: transparent; }

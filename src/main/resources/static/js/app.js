@@ -409,7 +409,7 @@
             bubble.appendChild(el('div', 'bubble__text', msg.deleted ? 'This message was deleted.' : msg.content));
             const meta = el('div', 'bubble__meta');
             meta.appendChild(el('span', '', formatTime(msg.createdAt) + (msg.edited ? ' · edited' : '')));
-            if (mine) meta.appendChild(el('span', 'ticks', '✓✓'));
+            if (mine) meta.appendChild(el('span', 'ticks', msg.readByCount > 0 ? '\u2713\u2713' : '\u2713'));
             bubble.appendChild(meta);
             const reactions = el('div', 'reactions');
             (msg.reactions || []).forEach((reaction) => {
@@ -671,6 +671,7 @@
         }
         if (state.currentConversation && state.currentConversation.id === msg.conversationId) {
             renderMessages();
+            if (state.user && String(msg.senderId) !== String(state.user.id)) markRead(msg.conversationId);
         }
         renderConversations();
     }
@@ -718,6 +719,19 @@
         } finally {
             state.messagesLoading = false;
             renderMessages();
+        }
+        markRead(id);
+    }
+
+    let lastMarkReadAt = 0;
+
+    function markRead(conversationId) {
+        const conv = (state.conversations || []).find((item) => String(item.id) === String(conversationId));
+        if (!conv || conv.unreadCount > 0 || Date.now() - lastMarkReadAt > 15000) {
+            lastMarkReadAt = Date.now();
+            request('/conversations/' + conversationId + '/read', { method: 'PUT', body: '{}' })
+                .then(() => { if (conv) conv.unreadCount = 0; renderConversations(); })
+                .catch(() => {});
         }
     }
 
@@ -1499,6 +1513,16 @@
                 upsertMessage(frame.data);
                 if (state.currentConversation && String(frame.conversationId) === String(state.currentConversation.id)) {
                     loadPinned(frame.conversationId);
+                }
+            } else if (frame.event === 'READ_UPDATE') {
+                if (state.user && String(frame.data && frame.data.userId) === String(state.user.id)) return;
+                if (state.currentConversation && String(frame.conversationId) === String(state.currentConversation.id)) {
+                    request('/conversations/' + frame.conversationId + '/messages?size=50')
+                        .then((messages) => {
+                            state.messages.set(state.currentConversation.id, messages);
+                            renderMessages();
+                        })
+                        .catch(() => {});
                 }
             }
         });

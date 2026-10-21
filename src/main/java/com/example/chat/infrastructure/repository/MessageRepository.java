@@ -32,6 +32,8 @@ public interface MessageRepository extends JpaRepository<MessageEntity, UUID> {
 
     Optional<MessageEntity> findByConversationIdAndClientMessageId(UUID conversationId, String clientMessageId);
 
+    Optional<MessageEntity> findFirstByConversationIdOrderByCreatedAtDesc(UUID conversationId);
+
     @Query("SELECT COUNT(m) FROM MessageEntity m WHERE m.conversationId = :convId AND m.deleted = false AND m.createdAt > (SELECT COALESCE(cm.lastReadAt, cm.joinedAt) FROM ConversationMemberEntity cm WHERE cm.conversationId = :convId AND cm.userId = :userId)")
     long countUnreadMessages(@Param("convId") UUID conversationId, @Param("userId") UUID userId);
 

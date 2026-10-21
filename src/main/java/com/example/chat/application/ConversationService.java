@@ -312,13 +312,6 @@ public class ConversationService {
         memberRepository.save(member);
     }
 
-    @Transactional
-    public void markAsRead(UUID conversationId, UUID currentUserId) {
-        ConversationMemberEntity member = requireMembership(conversationId, currentUserId);
-        member.setLastReadAt(Instant.now());
-        memberRepository.save(member);
-    }
-
     /** Owners promote members to moderator and demote moderators back. */
     @Transactional
     public ConversationMemberResponse setMemberRole(UUID conversationId, UUID currentUserId, UUID targetUserId, MemberRole newRole) {

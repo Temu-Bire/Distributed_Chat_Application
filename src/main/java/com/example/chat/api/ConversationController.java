@@ -4,6 +4,7 @@ import com.example.chat.application.AuthService;
 import com.example.chat.application.ConversationService;
 import com.example.chat.application.GroupInvitationService;
 import com.example.chat.application.GroupJoinRequestService;
+import com.example.chat.application.PersistentMessageService;
 import com.example.chat.dto.auth.UserProfileResponse;
 import com.example.chat.dto.conversation.*;
 import com.example.chat.dto.group.BlockedUserResponse;
@@ -30,15 +31,18 @@ import java.util.UUID;
 public class ConversationController {
 
     private final ConversationService conversationService;
+    private final PersistentMessageService messageService;
     private final AuthService authService;
     private final GroupJoinRequestService groupJoinRequestService;
     private final GroupInvitationService groupInvitationService;
 
     public ConversationController(ConversationService conversationService,
+                                    PersistentMessageService messageService,
                                     AuthService authService,
                                     GroupJoinRequestService groupJoinRequestService,
                                     GroupInvitationService groupInvitationService) {
         this.conversationService = conversationService;
+        this.messageService = messageService;
         this.authService = authService;
         this.groupJoinRequestService = groupJoinRequestService;
         this.groupInvitationService = groupInvitationService;
@@ -146,7 +150,7 @@ public class ConversationController {
             Principal principal,
             @PathVariable("id") UUID conversationId) {
         UserProfileResponse user = authService.getCurrentUser(principal);
-        conversationService.markAsRead(conversationId, user.id());
+        messageService.markMessagesRead(conversationId, user.id());
         return ResponseEntity.ok(Map.of("message", "Marked as read"));
     }
 

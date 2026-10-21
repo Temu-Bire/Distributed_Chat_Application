@@ -298,6 +298,27 @@ public class PersistentMessageService {
         return pinned.stream().map(this::enrich).toList();
     }
 
+    /**
+     * Records that the reader has seen every message in the conversation and
+     * tells the other members so their tick marks can update live.
+     */
+    @Transactional
+    public void markMessagesRead(UUID conversationId, UUID currentUserId) {
+        ConversationMemberEntity member = memberRepository.findByConversationIdAndUserId(conversationId, currentUserId)
+            .orElseThrow(() -> new ChatException(ChatException.NOT_MEMBER, "You are not a member of this conversation"));
+
+        Instant readAt = Instant.now();
+        messageRepository.findFirstByConversationIdOrderByCreatedAtDesc(conversationId)
+            .ifPresent(latest -> member.setLastReadMessageId(latest.getId()));
+        member.setLastReadAt(readAt);
+        memberRepository.save(member);
+
+        broadcastConversationEvent(conversationId, "READ_UPDATE", Map.of(
+            "userId", currentUserId,
+            "readAt", readAt
+        ));
+    }
+
     @Transactional(readOnly = true)
     public List<PersistentMessageResponse> searchMessages(UUID conversationId, UUID currentUserId, String query, int limit) {
         if (query == null || query.trim().isEmpty()) {
@@ -326,6 +347,11 @@ public class PersistentMessageService {
                     : preview(target.getContent()))
                 .orElse(null);
         }
+        int readByCount = (int) memberRepository.findByConversationId(message.getConversationId()).stream()
+            .filter(other -> !other.getUserId().equals(message.getSenderId()))
+            .filter(other -> other.getLastReadAt() != null
+                && !other.getLastReadAt().isBefore(message.getCreatedAt()))
+            .count();
         return new PersistentMessageResponse(
             message.getId(),
             message.getConversationId(),
@@ -335,6 +361,7 @@ public class PersistentMessageService {
             message.isEdited(),
             message.isDeleted(),
             message.isPinned(),
+            readByCount,
             message.getReplyToId(),
             replyPreview,
             reactionSummaries(List.of(message.getId())).getOrDefault(message.getId(), List.of()),
