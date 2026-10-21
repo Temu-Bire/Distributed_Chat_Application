@@ -5,6 +5,7 @@ import com.example.chat.application.PersistentMessageService;
 import com.example.chat.dto.auth.UserProfileResponse;
 import com.example.chat.dto.message.EditMessageDto;
 import com.example.chat.dto.message.PersistentMessageResponse;
+import com.example.chat.dto.message.ReactionDto;
 import com.example.chat.dto.message.SendMessageDto;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -44,7 +45,8 @@ public class MessageController {
             @Valid @RequestBody SendMessageDto request) {
         UserProfileResponse user = authService.getCurrentUser(principal);
         PersistentMessageResponse response = messageService.sendMessage(
-            conversationId, user.id(), user.username(), request.content()
+            conversationId, user.id(), user.username(), request.content(),
+            request.replyToId(), request.clientMessageId()
         );
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
@@ -65,5 +67,14 @@ public class MessageController {
         UserProfileResponse user = authService.getCurrentUser(principal);
         messageService.deleteMessage(messageId, user.id());
         return ResponseEntity.ok(Map.of("message", "Message deleted successfully"));
+    }
+
+    @PostMapping("/api/messages/{messageId}/reactions")
+    public ResponseEntity<PersistentMessageResponse> toggleReaction(
+            Principal principal,
+            @PathVariable("messageId") UUID messageId,
+            @Valid @RequestBody ReactionDto request) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        return ResponseEntity.ok(messageService.toggleReaction(messageId, user.id(), request.emoji()));
     }
 }

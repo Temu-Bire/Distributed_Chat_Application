@@ -135,4 +135,93 @@ class PersistentMessageServiceTest {
         assertThat(messages.stream().filter(m -> m.id().equals(msg.id())).findFirst().get().deleted()).isTrue();
         assertThat(messages.stream().filter(m -> m.id().equals(msg.id())).findFirst().get().content()).isEqualTo("This message was deleted.");
     }
+
+    @Test
+    @DisplayName("reply references target message and carries preview")
+    void replyToMessage() {
+        PersistentMessageResponse original = messageService.sendMessage(directConv.id(), alice.id(), alice.username(), "Question?");
+        PersistentMessageResponse reply = messageService.sendMessage(
+            directConv.id(), bob.id(), bob.username(), "Here is my answer", original.id(), null);
+
+        assertThat(reply.replyToId()).isEqualTo(original.id());
+        assertThat(reply.replyToContent()).isEqualTo("Question?");
+
+        List<PersistentMessageResponse> page = messageService.getMessages(directConv.id(), alice.id(), 0, 10);
+        assertThat(page.get(1).replyToId()).isEqualTo(original.id());
+    }
+
+    @Test
+    @DisplayName("cannot reply to a message from another conversation")
+    void replyAcrossConversationsRejected() {
+        UserProfileResponse charlie = authService.register(new RegisterRequest("msg_charlie2", "msg_charlie2@test.com", "pass123", "Charlie"), null);
+        ConversationSummaryResponse otherConv = conversationService.getOrCreateDirect(bob.id(), charlie.id());
+        PersistentMessageResponse foreign = messageService.sendMessage(otherConv.id(), bob.id(), bob.username(), "Elsewhere");
+
+        assertThatThrownBy(() -> messageService.sendMessage(
+            directConv.id(), alice.id(), alice.username(), "sneaky reply", foreign.id(), null))
+            .isInstanceOf(ChatException.class)
+            .hasFieldOrPropertyWithValue("code", ChatException.INVALID_COMMAND);
+    }
+
+    @Test
+    @DisplayName("retry with same client message id returns original without duplicating")
+    void idempotentSend() {
+        String clientId = "retry-1";
+        PersistentMessageResponse first = messageService.sendMessage(
+            directConv.id(), alice.id(), alice.username(), "Only once", null, clientId);
+        PersistentMessageResponse retry = messageService.sendMessage(
+            directConv.id(), alice.id(), alice.username(), "Only once", null, clientId);
+
+        assertThat(retry.id()).isEqualTo(first.id());
+        List<PersistentMessageResponse> page = messageService.getMessages(directConv.id(), alice.id(), 0, 10);
+        assertThat(page).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("reaction toggles on then off, aggregated per emoji")
+    void toggleReaction() {
+        PersistentMessageResponse msg = messageService.sendMessage(directConv.id(), alice.id(), alice.username(), "React to me");
+
+        PersistentMessageResponse liked = messageService.toggleReaction(msg.id(), alice.id(), "👍");
+        assertThat(liked.reactions()).containsExactly(new com.example.chat.dto.message.ReactionSummaryDto("👍", 1));
+
+        messageService.toggleReaction(msg.id(), bob.id(), "👍");
+        PersistentMessageResponse both = messageService.toggleReaction(msg.id(), alice.id(), "❤️");
+        assertThat(both.reactions()).extracting("emoji", "count")
+            .containsExactlyInAnyOrder(
+                org.assertj.core.groups.Tuple.tuple("👍", 2L),
+                org.assertj.core.groups.Tuple.tuple("❤️", 1L));
+
+        PersistentMessageResponse removed = messageService.toggleReaction(msg.id(), alice.id(), "👍");
+        assertThat(removed.reactions()).extracting("emoji", "count")
+            .containsExactlyInAnyOrder(
+                org.assertj.core.groups.Tuple.tuple("👍", 1L),
+                org.assertj.core.groups.Tuple.tuple("❤️", 1L));
+    }
+
+    @Test
+    @DisplayName("non-member cannot react; blank or oversized emoji rejected")
+    void reactionGuards() {
+        PersistentMessageResponse msg = messageService.sendMessage(directConv.id(), alice.id(), alice.username(), "Guards");
+        UserProfileResponse charlie = authService.register(new RegisterRequest("msg_charlie3", "msg_charlie3@test.com", "pass123", "Charlie"), null);
+
+        assertThatThrownBy(() -> messageService.toggleReaction(msg.id(), charlie.id(), "👍"))
+            .isInstanceOf(ChatException.class)
+            .hasFieldOrPropertyWithValue("code", ChatException.NOT_MEMBER);
+
+        assertThatThrownBy(() -> messageService.toggleReaction(msg.id(), alice.id(), "  "))
+            .isInstanceOf(ChatException.class)
+            .hasFieldOrPropertyWithValue("code", ChatException.INVALID_REACTION);
+    }
+
+    @Test
+    @DisplayName("deleted messages cannot be reacted to")
+    void cannotReactToDeletedMessage() {
+        PersistentMessageResponse msg = messageService.sendMessage(directConv.id(), alice.id(), alice.username(), "Doomed");
+        messageService.deleteMessage(msg.id(), alice.id());
+
+        assertThatThrownBy(() -> messageService.toggleReaction(msg.id(), bob.id(), "👍"))
+            .isInstanceOf(ChatException.class)
+            .hasFieldOrPropertyWithValue("code", ChatException.INVALID_COMMAND);
+    }
 }

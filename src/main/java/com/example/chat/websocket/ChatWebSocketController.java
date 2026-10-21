@@ -58,7 +58,8 @@ public class ChatWebSocketController {
                                    @Valid @Payload ChatMessageRequest request,
                                    Principal principal) {
         UserProfileResponse user = authService.getCurrentUser(principal);
-        persistentMessageService.sendMessage(conversationId, user.id(), user.username(), request.content());
+        persistentMessageService.sendMessage(conversationId, user.id(), user.username(),
+            request.content(), request.replyToId(), request.clientMessageId());
     }
 
     private static String sessionId(SimpMessageHeaderAccessor headers) {
