@@ -79,6 +79,18 @@ class FriendServiceTest {
     }
 
     @Test
+    @DisplayName("friend request carries the sender's message")
+    void friendRequestCarriesMessage() {
+        FriendRequestResponse res = friendService.sendFriendRequest(
+            alice.id(), new SendFriendRequest(bob.username(), null, "  Hi Bob, it's Alice  "));
+        assertThat(res.message()).isEqualTo("Hi Bob, it's Alice");
+
+        List<FriendRequestResponse> incoming = friendService.getIncomingRequests(bob.id());
+        assertThat(incoming).hasSize(1);
+        assertThat(incoming.get(0).message()).isEqualTo("Hi Bob, it's Alice");
+    }
+
+    @Test
     @DisplayName("accepting friend request creates mutual friendships")
     void acceptFriendRequestSuccess() {
         FriendRequestResponse req = friendService.sendFriendRequest(alice.id(), new SendFriendRequest(bob.username(), null));

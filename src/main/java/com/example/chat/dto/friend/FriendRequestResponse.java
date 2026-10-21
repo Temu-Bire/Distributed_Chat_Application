@@ -15,5 +15,6 @@ public record FriendRequestResponse(
     String receiverDisplayName,
     String receiverAvatarUrl,
     FriendRequestStatus status,
+    String message,
     Instant createdAt
 ) {}

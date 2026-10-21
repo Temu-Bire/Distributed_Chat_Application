@@ -74,7 +74,10 @@ public class FriendService {
             }
         }
 
-        FriendRequestEntity friendRequest = new FriendRequestEntity(senderId, receiver.getId());
+        String message = request.message() == null || request.message().isBlank()
+            ? null
+            : request.message().trim();
+        FriendRequestEntity friendRequest = new FriendRequestEntity(senderId, receiver.getId(), message);
         friendRequest = friendRequestRepository.save(friendRequest);
 
         UserEntity sender = userRepository.findById(senderId)
@@ -250,6 +253,7 @@ public class FriendService {
             receiver != null ? receiver.getDisplayName() : "Unknown",
             receiver != null ? receiver.getAvatarUrl() : null,
             req.getStatus(),
+            req.getMessage(),
             req.getCreatedAt()
         );
     }
