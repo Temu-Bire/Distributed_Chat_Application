@@ -40,6 +40,10 @@ public class SettingsController {
         settings.setNotificationsEnabled(dto.notificationsEnabled());
         settings.setSoundEnabled(dto.soundEnabled());
         settings.setOnlineVisibility(dto.onlineVisibility());
+        settings.setNotifyMessages(dto.notifyMessages());
+        settings.setNotifyMentions(dto.notifyMentions());
+        settings.setNotifyFriendRequests(dto.notifyFriendRequests());
+        settings.setNotifyGroupActivity(dto.notifyGroupActivity());
         settings = settingsRepository.save(settings);
 
         return ResponseEntity.ok(UserSettingsDto.from(settings));

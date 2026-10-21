@@ -26,6 +26,18 @@ public class UserSettingsEntity {
     @Column(nullable = false)
     private boolean onlineVisibility = true;
 
+    @Column(name = "notify_messages", nullable = false)
+    private boolean notifyMessages = true;
+
+    @Column(name = "notify_mentions", nullable = false)
+    private boolean notifyMentions = true;
+
+    @Column(name = "notify_friend_requests", nullable = false)
+    private boolean notifyFriendRequests = true;
+
+    @Column(name = "notify_group_activity", nullable = false)
+    private boolean notifyGroupActivity = true;
+
     public UserSettingsEntity() {}
 
     public UserSettingsEntity(UUID userId) {
@@ -49,4 +61,16 @@ public class UserSettingsEntity {
 
     public boolean isOnlineVisibility() { return onlineVisibility; }
     public void setOnlineVisibility(boolean onlineVisibility) { this.onlineVisibility = onlineVisibility; }
+
+    public boolean isNotifyMessages() { return notifyMessages; }
+    public void setNotifyMessages(boolean notifyMessages) { this.notifyMessages = notifyMessages; }
+
+    public boolean isNotifyMentions() { return notifyMentions; }
+    public void setNotifyMentions(boolean notifyMentions) { this.notifyMentions = notifyMentions; }
+
+    public boolean isNotifyFriendRequests() { return notifyFriendRequests; }
+    public void setNotifyFriendRequests(boolean notifyFriendRequests) { this.notifyFriendRequests = notifyFriendRequests; }
+
+    public boolean isNotifyGroupActivity() { return notifyGroupActivity; }
+    public void setNotifyGroupActivity(boolean notifyGroupActivity) { this.notifyGroupActivity = notifyGroupActivity; }
 }

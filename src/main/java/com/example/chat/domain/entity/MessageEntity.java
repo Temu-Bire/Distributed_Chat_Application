@@ -40,6 +40,30 @@ public class MessageEntity {
     @Column(name = "client_message_id", length = 64)
     private String clientMessageId;
 
+    @Column(nullable = false)
+    private boolean pinned = false;
+
+    @Column(name = "pinned_by")
+    private UUID pinnedBy;
+
+    @Column(name = "pinned_at")
+    private Instant pinnedAt;
+
+    @Column(name = "attachment_url", length = 500)
+    private String attachmentUrl;
+
+    @Column(name = "attachment_name", length = 150)
+    private String attachmentName;
+
+    @Column(name = "attachment_type", length = 60)
+    private String attachmentType;
+
+    @Column(name = "attachment_size")
+    private Long attachmentSize;
+
+    @Column(name = "forwarded_from_id")
+    private UUID forwardedFromId;
+
     @Column(nullable = false, updatable = false)
     private Instant createdAt = Instant.now();
 
@@ -92,4 +116,28 @@ public class MessageEntity {
 
     public Instant getEditedAt() { return editedAt; }
     public void setEditedAt(Instant editedAt) { this.editedAt = editedAt; }
+
+    public boolean isPinned() { return pinned; }
+    public void setPinned(boolean pinned) { this.pinned = pinned; }
+
+    public UUID getPinnedBy() { return pinnedBy; }
+    public void setPinnedBy(UUID pinnedBy) { this.pinnedBy = pinnedBy; }
+
+    public Instant getPinnedAt() { return pinnedAt; }
+    public void setPinnedAt(Instant pinnedAt) { this.pinnedAt = pinnedAt; }
+
+    public String getAttachmentUrl() { return attachmentUrl; }
+    public void setAttachmentUrl(String attachmentUrl) { this.attachmentUrl = attachmentUrl; }
+
+    public String getAttachmentName() { return attachmentName; }
+    public void setAttachmentName(String attachmentName) { this.attachmentName = attachmentName; }
+
+    public String getAttachmentType() { return attachmentType; }
+    public void setAttachmentType(String attachmentType) { this.attachmentType = attachmentType; }
+
+    public Long getAttachmentSize() { return attachmentSize; }
+    public void setAttachmentSize(Long attachmentSize) { this.attachmentSize = attachmentSize; }
+
+    public UUID getForwardedFromId() { return forwardedFromId; }
+    public void setForwardedFromId(UUID forwardedFromId) { this.forwardedFromId = forwardedFromId; }
 }
