@@ -356,11 +356,13 @@
             const mine = state.user && msg.senderId === state.user.id;
             const bubble = el('div', 'bubble ' + (mine ? 'bubble--out' : 'bubble--in'));
             if (!mine && isGroup(conv)) {
-                bubble.appendChild(el('small', '', msg.senderUsername || 'User'));
+                bubble.appendChild(el('small', 'bubble__author', msg.senderUsername || 'User'));
             }
-            bubble.appendChild(el('div', '', msg.deleted ? 'This message was deleted.' : msg.content));
-            const meta = formatTime(msg.createdAt) + (msg.edited ? ' · edited' : '');
-            bubble.appendChild(el('small', '', meta));
+            bubble.appendChild(el('div', 'bubble__text', msg.deleted ? 'This message was deleted.' : msg.content));
+            const meta = el('div', 'bubble__meta');
+            meta.appendChild(el('span', '', formatTime(msg.createdAt) + (msg.edited ? ' · edited' : '')));
+            if (mine) meta.appendChild(el('span', 'ticks', '✓✓'));
+            bubble.appendChild(meta);
             thread.appendChild(bubble);
         });
         thread.scrollTop = thread.scrollHeight;
@@ -717,6 +719,15 @@
         actions.appendChild(create);
     }
 
+    function switchGroupTab(tab) {
+        document.querySelectorAll('.group-menu__item').forEach((item) => {
+            item.classList.toggle('is-active', item.dataset.gtab === tab);
+        });
+        document.querySelectorAll('.group-pane').forEach((pane) => {
+            pane.hidden = pane.dataset.gpane !== tab;
+        });
+    }
+
     async function openGroupManage() {
         const conv = state.currentConversation;
         if (!conv || !isGroup(conv)) {
@@ -764,8 +775,9 @@
             });
 
             const isOwner = members.some(m => m.userId === state.user.id && m.role === 'OWNER');
-            $('group-join-requests-section').hidden = !isOwner;
-            $('group-invitations-section').hidden = !isOwner;
+            document.querySelectorAll('.group-menu__item[data-gtab="requests"], .group-menu__item[data-gtab="invitations"]')
+                .forEach((item) => { item.hidden = !isOwner; });
+            if (!isOwner) switchGroupTab('info');
 
             if (isOwner) {
                 try {
@@ -1112,6 +1124,18 @@
         $('chat-info-btn').addEventListener('click', () => {
             if (state.currentConversation && isGroup(state.currentConversation)) openGroupManage();
             else toast('Private conversation');
+        });
+        $('new-chat-btn').addEventListener('click', openNewPrivateModal);
+        $('chat-call-btn').addEventListener('click', () => toast('Voice calls are coming soon'));
+        $('chat-search-btn').addEventListener('click', () => $('conv-search').focus());
+        $('emoji-btn').addEventListener('click', () => {
+            const input = $('message-content-input');
+            input.value += '😊';
+            input.focus();
+        });
+        $('attach-btn').addEventListener('click', () => toast('File attachments are coming soon'));
+        document.querySelectorAll('.group-menu__item').forEach((item) => {
+            item.addEventListener('click', () => switchGroupTab(item.dataset.gtab));
         });
         document.querySelectorAll('#list-tabs .tab').forEach((tab) => {
             tab.addEventListener('click', () => {
