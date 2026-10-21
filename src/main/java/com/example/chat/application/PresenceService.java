@@ -51,20 +51,6 @@ public class PresenceService {
         return store.unregister(sessionId);
     }
 
-    /**
-     * Resolves the connected user behind a session.
-     *
-     * <p>This is how every message gets its sender: the display name comes from
-     * the server-side session, never from the client payload.</p>
-     *
-     * @throws ChatException if the connection has not joined yet
-     */
-    public ChatUser requireUser(String sessionId) {
-        return store.findBySessionId(sessionId)
-                .orElseThrow(() -> new ChatException(ChatException.NOT_JOINED,
-                        "Join the chat before sending messages."));
-    }
-
     /** Finds a connected user by display name, case-insensitively. */
     public Optional<ChatUser> findByUsername(String username) {
         return store.findByUsername(username);

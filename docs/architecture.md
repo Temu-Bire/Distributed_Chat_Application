@@ -12,11 +12,10 @@ A single Spring Boot process that:
 
 - serves the chat page and its static assets,
 - accepts STOMP-over-WebSocket connections at `/ws`,
-- holds presence and message routing **in memory**,
-- restarts empty: no database, no message history, no clustering.
-
-The original TCP client/server is preserved unchanged under `legacy/tcp/` for
-comparison. It is outside the Maven build.
+- persists users, friendships, conversations and messages in an embedded H2
+  file database (PostgreSQL mode) with Flyway migrations,
+- holds live presence in memory by default, with a Redis-backed distributed
+  mode (`chat.distributed.enabled`) for multi-instance deployments.
 
 ---
 
@@ -25,8 +24,7 @@ comparison. It is outside the Maven build.
 ```mermaid
 flowchart TB
     subgraph Browser["Browser — vanilla JS, no framework"]
-        UI["static/index.html + chat.js<br/>state of the UI + reconnection"]
-        VEND["vendor/stomp.umd.min.js<br/>STOMP protocol client"]
+        UI["static/index.html + js/app.js<br/>state of the UI + hand-rolled STOMP client + reconnection"]
     end
 
     subgraph Proc["Single Spring Boot process"]
@@ -40,15 +38,15 @@ flowchart TB
         end
 
         subgraph App["Application layer — rules and orchestration"]
-            CS["application/ChatService<br/>join / send / private / leave"]
+            CS["application/ChatService<br/>join / leave (presence)"]
             PS["application/PresenceService<br/>who is online"]
             MR["application/MessageRouter<br/>the only owner of destination names"]
             PORT["application/PresenceStore<br/>port (interface)"]
         end
 
         subgraph Core["Domain and transport contracts"]
-            D["domain/ChatMessage, ChatUser, MessageType<br/>no Spring types"]
-            DTO["dto/JoinRequest, ChatMessageRequest,<br/>PrivateMessageRequest, …Response"]
+            D["domain/ChatUser + JPA entities<br/>no Spring types in domain value objects"]
+            DTO["dto/JoinRequest, ChatMessageRequest,<br/>…Response records"]
         end
 
         subgraph Infra["Infrastructure and configuration"]
@@ -62,7 +60,6 @@ flowchart TB
 
     UI -->|WebSocket /ws| WS
     UI -->|GET /api/health| REST
-    VEND --> WS
     WS --> CS
     LEAVE --> CS
     CS --> PS
@@ -128,33 +125,23 @@ nothing about HTTP or WebSocket headers.
 | Destination | Payload | Effect |
 |---|---|---|
 | `/app/chat.join` | `{"username":"alice"}` | Registers this connection under a display name |
-| `/app/chat.send` | `{"content":"hello"}` | Broadcasts a public message |
-| `/app/chat.private` | `{"recipient":"bob","content":"hi"}` | Delivers to one connection and echoes to the sender |
+| `/app/conversations/{id}/send` | `{"content":"hello"}` | Persists a message and fans it out to the conversation topic |
 
 ### Server → client (broadcast or directed)
 
 | Destination | Payload | When |
 |---|---|---|
-| `/topic/public` | `ChatMessageResponse` | Every public message, and only those |
 | `/topic/users` | `UserPresenceResponse` | Any join, leave, or presence change |
-| `/user/queue/private` | `ChatMessageResponse` | A private message addressed to this connection |
+| `/topic/conversations/{id}` | conversation event (`NEW_MESSAGE`, `MESSAGE_EDITED`, `MESSAGE_DELETED`) | A persisted message changes in a conversation you subscribe to |
 | `/user/queue/errors` | `ErrorResponse` | A failure caused by *this* connection |
 
 ### Message JSON schema
 
-```json
-{
-  "messageId": "6f0c1b2e-…",
-  "type": "CHAT",
-  "sender": "alice",
-  "recipient": null,
-  "content": "hello",
-  "timestamp": "2026-10-19T07:52:06.862554700Z"
-}
-```
-
-`type` is `CHAT` or `PRIVATE`. `recipient` is `null` for `CHAT`. `sender`,
-`messageId`, and `timestamp` are **always assigned by the server**.
+Persisted conversation messages travel as `PersistentMessageResponse` objects
+(id, conversation id, sender id/username, content, timestamps, edit/delete
+flags) inside `NEW_MESSAGE` / `MESSAGE_EDITED` / `MESSAGE_DELETED` events on
+`/topic/conversations/{id}`. `sender`, ids, and timestamps are **always
+assigned by the server**.
 
 Presence payload:
 
@@ -176,9 +163,7 @@ client cannot be left with a stale list after a lost frame.
 |---|---|
 | `INVALID_USERNAME` | Blank, too long, or contains control characters |
 | `USERNAME_TAKEN` | Another live connection already holds the name |
-| `NOT_JOINED` | A message was sent before joining |
 | `INVALID_MESSAGE` | Blank or over 2000 characters |
-| `RECIPIENT_NOT_FOUND` | Private target is blank or not connected |
 | `INVALID_COMMAND` | The frame is missing something the server needs |
 | `INTERNAL_ERROR` | A server bug; details go to the log only |
 
@@ -265,14 +250,14 @@ requires "message 2 must be processed strictly after message 1".
 
 | Requirement | How |
 |---|---|
-| Server-side validation | Bean Validation on DTOs **and** a re-check in `ChatService` (defence in depth, so a future adapter that skips validation cannot bypass the rules) |
+| Server-side validation | Bean Validation on DTOs **and** re-checks in the application services (defence in depth, so a future adapter that skips validation cannot bypass the rules) |
 | Message length limit | 2000 chars, enforced in both places, asserted by tests |
 | Restricted origins | Explicit allow-list; never `*` |
 | Sender cannot be spoofed | `sender` comes from the connection's `Principal`, never from the payload |
-| Private messages stay private | Delivered to the recipient and echoed to the sender; never broadcast |
+| Direct chats stay direct | A direct conversation only fans out to `/topic/conversations/{id}` of its two members; membership is checked server-side |
 | Private content is not logged | Only lifecycle events are logged (`User 'alice' joined`) |
 | Errors are not broadcast | Every error goes to the originating connection's `/user/queue/errors` |
-| User content is not markup | `chat.js` renders with `textContent`; a test fails the build if an HTML sink appears |
+| User content is not markup | `app.js` renders with `textContent`; a test fails the build if an HTML sink appears |
 
 Origin checking deserves a precise note. Spring's `OriginHandshakeInterceptor`
 allows a request when either (a) the `Origin` header matches the request's own
@@ -438,16 +423,16 @@ messages.
 | 1 | Spring Boot 3.5.16, Java 21, Maven wrapper | Current LTS + pinned build tool; wrapper removes the "install Maven first" step |
 | 2 | Native WebSocket only, no SockJS | Every target browser supports WebSocket; removing it drops a protocol layer and a dependency |
 | 3 | In-process simple broker for MVP | No infrastructure to run; the boundary is one method call (`enableSimpleBroker` → `enableStompBrokerRelay`) |
-| 4 | `/queue` is a broker prefix | Spring translates `/user/queue/x` into `/queue/x-user<sessionId>`; without `/queue` in the broker, private messages and errors are undeliverable |
-| 5 | Per-connection `Principal` at handshake | Spring only registers a session for `/user/**` delivery when a principal exists; this is also the future authentication seam |
-| 6 | Join/leave are presence events, not chat messages | `/topic/public` then carries only `CHAT`, so a client never has to filter system notices out of history, and there is no double broadcast |
+| 4 | `/queue` is a broker prefix | Spring translates `/user/queue/x` into `/queue/x-user<sessionId>`; without `/queue` in the broker, per-connection error replies are undeliverable |
+| 5 | Per-connection `Principal` at handshake | Spring only registers a session for `/user/**` delivery when a principal exists; this is also the authentication seam |
+| 6 | Join/leave are presence events, not chat messages | Presence travels on `/topic/users`; conversation content on `/topic/conversations/{id}`, so a client never has to filter system notices out of history |
 | 7 | Presence message carries the full list | A client cannot be left stale by a single lost frame; no delta replay logic |
 | 8 | Atomic `putIfAbsent` for uniqueness | Lock-free correctness: no lock is held while anything talks to the network |
 | 9 | Bounded pools with `CallerRunsPolicy` | Overload becomes back-pressure instead of unbounded threads or dropped messages |
 | 10 | DTO bean validation **and** service re-check | Documented defence in depth; keeps the rules correct if a second adapter is added |
 | 11 | Error codes name the concept, not the layer | A bad username must not be reported as a bad message just because the DTO layer caught it |
-| 12 | No Spring Security dependency | Nothing to authenticate yet; adding it now would imply guarantees the app does not make |
-| 13 | Vendored STOMP JS, no CDN or npm | The demo works offline and needs no build step |
+| 12 | Session-based Spring Security for the REST API | Cookie sessions with BCrypt-hashed passwords; the WebSocket handshake reuses the same session principal |
+| 13 | Hand-rolled minimal STOMP client in `app.js` | The demo works offline and needs no build step or third-party JS |
 | 14 | `textContent` only, enforced by a test | Prevents a message body from becoming markup in a reader's browser |
 
 ---
@@ -456,13 +441,13 @@ messages.
 
 | Level | Covers |
 |---|---|
-| Unit (`ChatServiceTest`) | Every rule: validation, duplicate names, routing decisions, disconnect cleanup, error codes |
-| Concurrency (`DuplicateUsernameConcurrencyTest`) | 32 threads racing to claim a name, including mixed case |
+| Unit (`ChatServiceTest`) | Presence rules: join validation, duplicate names, rejoin, leave cleanup, error codes |
+| Concurrency (`DistributedConcurrencyTest`) | Racing threads claiming a name, including mixed case |
 | Unit (`InMemoryPresenceStoreTest`) | The port's contract: atomicity, lookup, removal |
-| Contract (`FrontendContractTest`) | `chat.js` destinations match `MessageRouter`; no HTML sink in the page script |
-| Integration (`ChatWebSocketIntegrationTest`) | Real sockets, 2–3 simultaneous clients: presence, public round trip, private delivery and isolation, spoof resistance, invalid/oversized input, disconnect |
-| Integration (`HealthEndpointIntegrationTest`) | The REST surface |
+| Contract (`FrontendContractTest`) | `app.js` destinations match `MessageRouter`; no HTML sink in the page script |
+| Integration (`ChatWebSocketIntegrationTest`) | Real sockets, 2–3 simultaneous clients: presence fan-out, duplicate-name refusal, oversized input, disconnect |
+| Integration (`HealthEndpointIntegrationTest`, `FriendControllerIntegrationTest`, `FullE2EChatJourneyTest`) | The REST surface: health, friend requests, register → friend → chat journey |
 
-`ChatWebSocketIntegrationTest` contains an explicit **negative** assertion that
-a private message is never published to `/topic/public` — a test that would pass
-trivially if private routing were accidentally replaced by a broadcast.
+`ChatWebSocketIntegrationTest` asserts negatively as well as positively: a
+refused duplicate join must publish **no** presence frame — a test that would
+pass trivially if refusals were indistinguishable from successful joins.

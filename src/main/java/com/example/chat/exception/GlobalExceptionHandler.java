@@ -69,7 +69,6 @@ public class GlobalExceptionHandler {
         }
         return switch (error.getField()) {
             case "username" -> ChatException.INVALID_USERNAME;
-            case "recipient" -> ChatException.RECIPIENT_NOT_FOUND;
             default -> ChatException.INVALID_MESSAGE;
         };
     }

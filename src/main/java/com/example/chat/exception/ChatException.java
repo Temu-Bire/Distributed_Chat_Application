@@ -15,14 +15,8 @@ public class ChatException extends RuntimeException {
     /** The requested username is already held by another live connection. */
     public static final String USERNAME_TAKEN = "USERNAME_TAKEN";
 
-    /** The connection has not completed the join step yet. */
-    public static final String NOT_JOINED = "NOT_JOINED";
-
-    /** Message body is blank or longer than {@code ChatMessage.MAX_CONTENT_LENGTH}. */
+    /** Message body is blank or too long. */
     public static final String INVALID_MESSAGE = "INVALID_MESSAGE";
-
-    /** The private-message target is blank, is the sender, or is not connected. */
-    public static final String RECIPIENT_NOT_FOUND = "RECIPIENT_NOT_FOUND";
 
     /** The inbound frame was missing information the server needs. */
     public static final String INVALID_COMMAND = "INVALID_COMMAND";

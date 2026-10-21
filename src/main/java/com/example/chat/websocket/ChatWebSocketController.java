@@ -5,7 +5,6 @@ import com.example.chat.application.ChatService;
 import com.example.chat.application.PersistentMessageService;
 import com.example.chat.dto.ChatMessageRequest;
 import com.example.chat.dto.JoinRequest;
-import com.example.chat.dto.PrivateMessageRequest;
 import com.example.chat.dto.auth.UserProfileResponse;
 import com.example.chat.exception.ChatException;
 import jakarta.validation.Valid;
@@ -21,16 +20,15 @@ import java.util.UUID;
 /**
  * Inbound STOMP adapter.
  *
- * <p>Its whole job is to translate a STOMP frame into a call on
- * {@link ChatService}: pull the connection identity out of the session
+ * <p>Its whole job is to translate a STOMP frame into a call on the
+ * application services: pull the connection identity out of the session
  * headers, hand the validated payload over, and nothing else. There is no
  * business logic here, and no handler trusts a sender field from the
  * payload.</p>
  *
  * <pre>
- * /app/chat.join     {"username":"alice"}
- * /app/chat.send     {"content":"hello"}
- * /app/chat.private  {"recipient":"bob","content":"hi"}
+ * /app/chat.join                     {"username":"alice"}
+ * /app/conversations/{id}/send       {"content":"hello"}
  * </pre>
  */
 @Controller
@@ -52,18 +50,6 @@ public class ChatWebSocketController {
     @MessageMapping("/chat.join")
     public void join(@Valid @Payload JoinRequest request, SimpMessageHeaderAccessor headers) {
         chatService.join(sessionId(headers), messagingUser(headers), request.username());
-    }
-
-    /** Broadcasts a public message to everyone. */
-    @MessageMapping("/chat.send")
-    public void send(@Valid @Payload ChatMessageRequest request, SimpMessageHeaderAccessor headers) {
-        chatService.sendPublicMessage(sessionId(headers), request.content());
-    }
-
-    /** Delivers a private message to one connected user. */
-    @MessageMapping("/chat.private")
-    public void sendPrivate(@Valid @Payload PrivateMessageRequest request, SimpMessageHeaderAccessor headers) {
-        chatService.sendPrivateMessage(sessionId(headers), request.recipient(), request.content());
     }
 
     /** Sends a message into a persisted conversation over the WebSocket thread pool. */

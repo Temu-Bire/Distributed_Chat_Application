@@ -8,11 +8,7 @@
     const API = '/api';
     const DEST = Object.freeze({
         JOIN: '/app/chat.join',
-        SEND: '/app/chat.send',
-        PRIVATE: '/app/chat.private',
-        PUBLIC: '/topic/public',
         USERS: '/topic/users',
-        PRIVATE_BOX: '/user/queue/private',
         ERROR_BOX: '/user/queue/errors'
     });
 
@@ -1043,9 +1039,7 @@
         const client = createStompClient();
         state.stomp = client;
         client.connect(() => {
-            client.subscribe(DEST.PUBLIC, () => {});
             client.subscribe(DEST.USERS, () => {});
-            client.subscribe(DEST.PRIVATE_BOX, () => {});
             client.subscribe(DEST.ERROR_BOX, (err) => {
                 if (err && err.message) toast(err.message);
             });

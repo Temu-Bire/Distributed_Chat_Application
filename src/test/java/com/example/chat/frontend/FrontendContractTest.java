@@ -41,31 +41,16 @@ class FrontendContractTest {
     void browserDestinationsMatchTheServer() throws IOException {
         assertThat(CHAT_JS).as("the shipped browser client").isRegularFile();
 
-        String content = Files.readString(CHAT_JS, StandardCharsets.UTF_8);
-        if (content.contains("DEST")) {
-            try {
-                Map<String, String> declared = destinationsIn(content);
-                assertThat(declared)
-                        .as("the DEST map in chat.js")
-                        .containsOnlyKeys("JOIN", "SEND", "PRIVATE", "PUBLIC", "USERS", "PRIVATE_BOX", "ERROR_BOX");
-                assertThat(declared.get("JOIN"))
-                        .isEqualTo(MessageRouter.APP_PREFIX + "/chat.join");
-                assertThat(declared.get("SEND"))
-                        .isEqualTo(MessageRouter.APP_PREFIX + "/chat.send");
-                assertThat(declared.get("PRIVATE"))
-                        .isEqualTo(MessageRouter.APP_PREFIX + "/chat.private");
-                assertThat(declared.get("PUBLIC"))
-                        .isEqualTo(MessageRouter.TOPIC_PUBLIC);
-                assertThat(declared.get("USERS"))
-                        .isEqualTo(MessageRouter.TOPIC_USERS);
-                assertThat(declared.get("PRIVATE_BOX"))
-                        .isEqualTo(MessageRouter.USER_PREFIX + MessageRouter.QUEUE_PRIVATE);
-                assertThat(declared.get("ERROR_BOX"))
-                        .isEqualTo(MessageRouter.USER_PREFIX + MessageRouter.QUEUE_ERRORS);
-            } catch (Throwable t) {
-                // New frontend design doesn't use the old DEST map - skip contract check
-            }
-        }
+        Map<String, String> declared = destinationsIn(Files.readString(CHAT_JS, StandardCharsets.UTF_8));
+        assertThat(declared)
+                .as("the DEST map in app.js")
+                .containsOnlyKeys("JOIN", "USERS", "ERROR_BOX");
+        assertThat(declared.get("JOIN"))
+                .isEqualTo(MessageRouter.APP_PREFIX + "/chat.join");
+        assertThat(declared.get("USERS"))
+                .isEqualTo(MessageRouter.TOPIC_USERS);
+        assertThat(declared.get("ERROR_BOX"))
+                .isEqualTo(MessageRouter.USER_PREFIX + MessageRouter.QUEUE_ERRORS);
     }
 
     @Test
