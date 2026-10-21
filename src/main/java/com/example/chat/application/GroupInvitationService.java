@@ -19,15 +19,18 @@ public class GroupInvitationService {
     private final ConversationRepository conversationRepository;
     private final ConversationMemberRepository memberRepository;
     private final UserRepository userRepository;
+    private final GroupBlockRepository groupBlockRepository;
 
     public GroupInvitationService(GroupInvitationRepository groupInvitationRepository,
                                     ConversationRepository conversationRepository,
                                     ConversationMemberRepository memberRepository,
-                                    UserRepository userRepository) {
+                                    UserRepository userRepository,
+                                    GroupBlockRepository groupBlockRepository) {
         this.groupInvitationRepository = groupInvitationRepository;
         this.conversationRepository = conversationRepository;
         this.memberRepository = memberRepository;
         this.userRepository = userRepository;
+        this.groupBlockRepository = groupBlockRepository;
     }
 
     @Transactional
@@ -42,8 +45,8 @@ public class GroupInvitationService {
         ConversationMemberEntity inviterMember = memberRepository.findByConversationIdAndUserId(groupId, inviterId)
             .orElseThrow(() -> new ChatException(ChatException.NOT_MEMBER, "You are not a member of this group"));
 
-        if (inviterMember.getRole() != MemberRole.OWNER) {
-            throw new ChatException(ChatException.FORBIDDEN, "Only group owners can invite members");
+        if (inviterMember.getRole() != MemberRole.OWNER && inviterMember.getRole() != MemberRole.MODERATOR) {
+            throw new ChatException(ChatException.FORBIDDEN, "Only group admins can invite members");
         }
 
         List<GroupInvitationResponse> responses = new ArrayList<>();
@@ -59,6 +62,10 @@ public class GroupInvitationService {
 
             if (memberRepository.existsByConversationIdAndUserId(groupId, userId)) {
                 continue;
+            }
+
+            if (groupBlockRepository.existsByGroupIdAndUserId(groupId, userId)) {
+                continue; // blocked users cannot be invited
             }
 
             if (groupInvitationRepository.existsByGroupIdAndInvitedUserId(groupId, userId)) {
@@ -88,6 +95,10 @@ public class GroupInvitationService {
 
         if (invitation.getStatus() != GroupInvitationStatus.PENDING) {
             throw new ChatException(ChatException.INVALID_COMMAND, "Invitation is not pending");
+        }
+
+        if (groupBlockRepository.existsByGroupIdAndUserId(invitation.getGroupId(), userId)) {
+            throw new ChatException(ChatException.USER_BLOCKED, "You are blocked from this group");
         }
 
         if (memberRepository.existsByConversationIdAndUserId(invitation.getGroupId(), userId)) {
@@ -175,8 +186,8 @@ public class GroupInvitationService {
         ConversationMemberEntity adminMember = memberRepository.findByConversationIdAndUserId(groupId, adminUserId)
             .orElseThrow(() -> new ChatException(ChatException.NOT_MEMBER, "You are not a member of this group"));
 
-        if (adminMember.getRole() != MemberRole.OWNER) {
-            throw new ChatException(ChatException.FORBIDDEN, "Only group owners can view invitations");
+        if (adminMember.getRole() != MemberRole.OWNER && adminMember.getRole() != MemberRole.MODERATOR) {
+            throw new ChatException(ChatException.FORBIDDEN, "Only group admins can view invitations");
         }
 
         List<GroupInvitationEntity> invitations = groupInvitationRepository.findByGroupIdAndStatusOrderByCreatedAtDesc(

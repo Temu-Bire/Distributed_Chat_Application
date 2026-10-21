@@ -16,6 +16,7 @@ public record ConversationSummaryResponse(
     String lastMessageSender,
     long unreadCount,
     boolean isGroup,
+    boolean isPrivate,
     String otherUsername,
     UUID otherUserId
 ) {}

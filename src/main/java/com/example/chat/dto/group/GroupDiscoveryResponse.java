@@ -10,6 +10,7 @@ public record GroupDiscoveryResponse(
     String avatarUrl,
     int memberCount,
     String type,
+    boolean isPrivate,
     String membershipStatus,
     Instant createdAt
 ) {}

@@ -2,6 +2,7 @@ package com.example.chat.application;
 
 import com.example.chat.domain.entity.*;
 import com.example.chat.dto.conversation.*;
+import com.example.chat.dto.group.BlockedUserResponse;
 import com.example.chat.exception.ChatException;
 import com.example.chat.infrastructure.repository.*;
 import org.springframework.stereotype.Service;
@@ -17,17 +18,26 @@ public class ConversationService {
     private final ConversationMemberRepository memberRepository;
     private final UserRepository userRepository;
     private final MessageRepository messageRepository;
+    private final GroupBlockRepository groupBlockRepository;
+    private final GroupJoinRequestRepository groupJoinRequestRepository;
+    private final GroupInvitationRepository groupInvitationRepository;
     private final PresenceService presenceService;
 
     public ConversationService(ConversationRepository conversationRepository,
                                ConversationMemberRepository memberRepository,
                                UserRepository userRepository,
                                MessageRepository messageRepository,
+                               GroupBlockRepository groupBlockRepository,
+                               GroupJoinRequestRepository groupJoinRequestRepository,
+                               GroupInvitationRepository groupInvitationRepository,
                                PresenceService presenceService) {
         this.conversationRepository = conversationRepository;
         this.memberRepository = memberRepository;
         this.userRepository = userRepository;
         this.messageRepository = messageRepository;
+        this.groupBlockRepository = groupBlockRepository;
+        this.groupJoinRequestRepository = groupJoinRequestRepository;
+        this.groupInvitationRepository = groupInvitationRepository;
         this.presenceService = presenceService;
     }
 
@@ -69,6 +79,7 @@ public class ConversationService {
         ConversationEntity group = new ConversationEntity(ConversationType.GROUP, title, currentUserId);
         if (request.description() != null) group.setDescription(request.description().trim());
         if (request.avatarUrl() != null) group.setAvatarUrl(request.avatarUrl().trim());
+        group.setPrivate(Boolean.TRUE.equals(request.isPrivate()));
         group = conversationRepository.save(group);
 
         List<ConversationMemberEntity> members = new ArrayList<>();
@@ -83,6 +94,32 @@ public class ConversationService {
         }
         memberRepository.saveAll(members);
         return mapToSummary(group, currentUserId);
+    }
+
+    /**
+     * Direct entry into a public group. Private groups require an approved join
+     * request or an accepted invitation instead.
+     */
+    @Transactional
+    public ConversationSummaryResponse joinGroup(UUID conversationId, UUID currentUserId) {
+        ConversationEntity conv = conversationRepository.findById(conversationId)
+            .orElseThrow(() -> new ChatException(ChatException.CONVERSATION_NOT_FOUND, "Group not found"));
+
+        if (conv.getType() != ConversationType.GROUP) {
+            throw new ChatException(ChatException.INVALID_COMMAND, "Can only join group conversations");
+        }
+        if (groupBlockRepository.existsByGroupIdAndUserId(conversationId, currentUserId)) {
+            throw new ChatException(ChatException.USER_BLOCKED, "You are blocked from this group");
+        }
+        if (memberRepository.existsByConversationIdAndUserId(conversationId, currentUserId)) {
+            return mapToSummary(conv, currentUserId);
+        }
+        if (conv.isPrivate()) {
+            throw new ChatException(ChatException.FORBIDDEN, "This group is private. Send a join request instead.");
+        }
+
+        memberRepository.save(new ConversationMemberEntity(conversationId, currentUserId, MemberRole.MEMBER));
+        return mapToSummary(conv, currentUserId);
     }
 
     @Transactional(readOnly = true)
@@ -132,8 +169,16 @@ public class ConversationService {
             throw new ChatException(ChatException.INVALID_COMMAND, "Cannot add members to a direct conversation");
         }
 
+        if (currentMember.getRole() == MemberRole.MEMBER) {
+            throw new ChatException(ChatException.FORBIDDEN, "Only group admins can add members directly");
+        }
+
         if (memberRepository.existsByConversationIdAndUserId(conversationId, request.userId())) {
             return; // already member
+        }
+
+        if (groupBlockRepository.existsByGroupIdAndUserId(conversationId, request.userId())) {
+            throw new ChatException(ChatException.USER_BLOCKED, "This user is blocked from the group. Unblock them first.");
         }
 
         if (!userRepository.existsById(request.userId())) {
@@ -154,15 +199,23 @@ public class ConversationService {
             throw new ChatException(ChatException.INVALID_COMMAND, "Cannot remove members from a direct conversation");
         }
 
-        // Only owner can remove others; any member can remove themselves (leave)
+        // Self-removal is leaving; owners may remove anyone; moderators only plain members.
         boolean isSelf = currentUserId.equals(memberIdToRemove);
-        boolean isOwner = currentMember.getRole() == MemberRole.OWNER;
 
-        if (!isSelf && !isOwner) {
-            throw new ChatException(ChatException.FORBIDDEN, "Only group owner can remove members");
+        if (!isSelf) {
+            ConversationMemberEntity target = memberRepository.findByConversationIdAndUserId(conversationId, memberIdToRemove)
+                .orElseThrow(() -> new ChatException(ChatException.USER_NOT_FOUND, "That user is not a member of this group"));
+
+            if (currentMember.getRole() == MemberRole.OWNER) {
+                // allowed
+            } else if (currentMember.getRole() == MemberRole.MODERATOR && target.getRole() == MemberRole.MEMBER) {
+                // allowed
+            } else {
+                throw new ChatException(ChatException.FORBIDDEN, "You are not allowed to remove this member");
+            }
         }
 
-        if (isSelf && isOwner) {
+        if (isSelf && currentMember.getRole() == MemberRole.OWNER) {
             List<ConversationMemberEntity> remaining = memberRepository.findByConversationId(conversationId)
                 .stream().filter(m -> !m.getUserId().equals(currentUserId)).toList();
             if (remaining.isEmpty()) {
@@ -185,8 +238,8 @@ public class ConversationService {
     @Transactional
     public ConversationSummaryResponse updateGroup(UUID conversationId, UUID currentUserId, UpdateGroupRequest request) {
         ConversationMemberEntity currentMember = requireMembership(conversationId, currentUserId);
-        if (currentMember.getRole() != MemberRole.OWNER) {
-            throw new ChatException(ChatException.FORBIDDEN, "Only group owner can update group details");
+        if (currentMember.getRole() == MemberRole.MEMBER) {
+            throw new ChatException(ChatException.FORBIDDEN, "Only group admins can update group details");
         }
 
         ConversationEntity conv = conversationRepository.findById(conversationId)
@@ -195,6 +248,7 @@ public class ConversationService {
         conv.setTitle(request.title().trim());
         if (request.description() != null) conv.setDescription(request.description().trim());
         if (request.avatarUrl() != null) conv.setAvatarUrl(request.avatarUrl().trim());
+        if (request.isPrivate() != null) conv.setPrivate(request.isPrivate());
         conv = conversationRepository.save(conv);
 
         return mapToSummary(conv, currentUserId);
@@ -223,6 +277,98 @@ public class ConversationService {
         ConversationMemberEntity member = requireMembership(conversationId, currentUserId);
         member.setLastReadAt(Instant.now());
         memberRepository.save(member);
+    }
+
+    /** Owners promote members to moderator and demote moderators back. */
+    @Transactional
+    public ConversationMemberResponse setMemberRole(UUID conversationId, UUID currentUserId, UUID targetUserId, MemberRole newRole) {
+        ConversationMemberEntity currentMember = requireMembership(conversationId, currentUserId);
+        if (currentMember.getRole() != MemberRole.OWNER) {
+            throw new ChatException(ChatException.FORBIDDEN, "Only the group owner can change roles");
+        }
+        if (newRole == MemberRole.OWNER) {
+            throw new ChatException(ChatException.INVALID_COMMAND, "Ownership is transferred by leaving the group");
+        }
+
+        ConversationMemberEntity target = memberRepository.findByConversationIdAndUserId(conversationId, targetUserId)
+            .orElseThrow(() -> new ChatException(ChatException.USER_NOT_FOUND, "That user is not a member of this group"));
+
+        if (target.getRole() == MemberRole.OWNER) {
+            throw new ChatException(ChatException.INVALID_COMMAND, "The group owner's role cannot be changed");
+        }
+
+        target.setRole(newRole);
+        memberRepository.save(target);
+        UserEntity user = userRepository.findById(targetUserId).orElseThrow();
+        return new ConversationMemberResponse(
+            user.getId(), user.getUsername(), user.getDisplayName(), user.getAvatarUrl(),
+            target.getRole(), target.getJoinedAt(), presenceService.isOnline(user.getUsername()));
+    }
+
+    /**
+     * Admins block a user from the group: membership and any pending join
+     * request or invitation are removed and the user cannot rejoin or be
+     * invited again until unblocked.
+     */
+    @Transactional
+    public void blockMember(UUID conversationId, UUID currentUserId, UUID targetUserId) {
+        ConversationMemberEntity currentMember = requireMembership(conversationId, currentUserId);
+        boolean isAdmin = currentMember.getRole() == MemberRole.OWNER || currentMember.getRole() == MemberRole.MODERATOR;
+        if (!isAdmin) {
+            throw new ChatException(ChatException.FORBIDDEN, "Only group admins can block members");
+        }
+        if (currentUserId.equals(targetUserId)) {
+            throw new ChatException(ChatException.INVALID_COMMAND, "You cannot block yourself");
+        }
+
+        ConversationMemberEntity target = memberRepository.findByConversationIdAndUserId(conversationId, targetUserId)
+            .orElseThrow(() -> new ChatException(ChatException.USER_NOT_FOUND, "That user is not a member of this group"));
+        if (target.getRole() == MemberRole.OWNER) {
+            throw new ChatException(ChatException.FORBIDDEN, "The group owner cannot be blocked");
+        }
+        if (currentMember.getRole() == MemberRole.MODERATOR && target.getRole() != MemberRole.MEMBER) {
+            throw new ChatException(ChatException.FORBIDDEN, "Moderators can only block plain members");
+        }
+
+        memberRepository.delete(target);
+        groupJoinRequestRepository.deleteByGroupIdAndUserId(conversationId, targetUserId);
+        groupInvitationRepository.findByGroupIdAndInvitedUserId(conversationId, targetUserId)
+            .ifPresent(invitation -> {
+                if (invitation.getStatus() == GroupInvitationStatus.PENDING) {
+                    groupInvitationRepository.delete(invitation);
+                }
+            });
+        if (!groupBlockRepository.existsByGroupIdAndUserId(conversationId, targetUserId)) {
+            groupBlockRepository.save(new GroupBlockEntity(conversationId, targetUserId, currentUserId));
+        }
+    }
+
+    @Transactional
+    public void unblockMember(UUID conversationId, UUID currentUserId, UUID targetUserId) {
+        ConversationMemberEntity currentMember = requireMembership(conversationId, currentUserId);
+        boolean isAdmin = currentMember.getRole() == MemberRole.OWNER || currentMember.getRole() == MemberRole.MODERATOR;
+        if (!isAdmin) {
+            throw new ChatException(ChatException.FORBIDDEN, "Only group admins can unblock users");
+        }
+        if (!groupBlockRepository.existsByGroupIdAndUserId(conversationId, targetUserId)) {
+            throw new ChatException(ChatException.INVALID_COMMAND, "That user is not blocked from this group");
+        }
+        groupBlockRepository.deleteByGroupIdAndUserId(conversationId, targetUserId);
+    }
+
+    @Transactional(readOnly = true)
+    public List<BlockedUserResponse> getBlockedMembers(UUID conversationId, UUID currentUserId) {
+        ConversationMemberEntity currentMember = requireMembership(conversationId, currentUserId);
+        boolean isAdmin = currentMember.getRole() == MemberRole.OWNER || currentMember.getRole() == MemberRole.MODERATOR;
+        if (!isAdmin) {
+            throw new ChatException(ChatException.FORBIDDEN, "Only group admins can view blocked users");
+        }
+        List<BlockedUserResponse> blocked = new ArrayList<>();
+        for (GroupBlockEntity block : groupBlockRepository.findByGroupId(conversationId)) {
+            userRepository.findById(block.getUserId()).ifPresent(user -> blocked.add(new BlockedUserResponse(
+                user.getId(), user.getUsername(), user.getDisplayName(), user.getAvatarUrl(), block.getCreatedAt())));
+        }
+        return blocked;
     }
 
     public ConversationMemberEntity requireMembership(UUID conversationId, UUID userId) {
@@ -266,6 +412,7 @@ public class ConversationService {
             conv.getLastMessageSender(),
             unread,
             conv.getType() == ConversationType.GROUP,
+            conv.isPrivate(),
             otherUsername,
             otherUserId
         );

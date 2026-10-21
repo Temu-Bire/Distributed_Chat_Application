@@ -21,15 +21,18 @@ public class GroupJoinRequestService {
     private final ConversationRepository conversationRepository;
     private final ConversationMemberRepository memberRepository;
     private final UserRepository userRepository;
+    private final GroupBlockRepository groupBlockRepository;
 
     public GroupJoinRequestService(GroupJoinRequestRepository groupJoinRequestRepository,
                                      ConversationRepository conversationRepository,
                                      ConversationMemberRepository memberRepository,
-                                     UserRepository userRepository) {
+                                     UserRepository userRepository,
+                                     GroupBlockRepository groupBlockRepository) {
         this.groupJoinRequestRepository = groupJoinRequestRepository;
         this.conversationRepository = conversationRepository;
         this.memberRepository = memberRepository;
         this.userRepository = userRepository;
+        this.groupBlockRepository = groupBlockRepository;
     }
 
     @Transactional
@@ -39,6 +42,10 @@ public class GroupJoinRequestService {
 
         if (group.getType() != ConversationType.GROUP) {
             throw new ChatException(ChatException.INVALID_COMMAND, "Can only join group conversations");
+        }
+
+        if (groupBlockRepository.existsByGroupIdAndUserId(groupId, userId)) {
+            throw new ChatException(ChatException.USER_BLOCKED, "You are blocked from this group");
         }
 
         if (memberRepository.existsByConversationIdAndUserId(groupId, userId)) {
@@ -82,12 +89,16 @@ public class GroupJoinRequestService {
         ConversationMemberEntity adminMember = memberRepository.findByConversationIdAndUserId(request.getGroupId(), adminUserId)
             .orElseThrow(() -> new ChatException(ChatException.NOT_MEMBER, "You are not a member of this group"));
 
-        if (adminMember.getRole() != MemberRole.OWNER) {
-            throw new ChatException(ChatException.FORBIDDEN, "Only group owners can accept join requests");
+        if (!isAdmin(adminMember)) {
+            throw new ChatException(ChatException.FORBIDDEN, "Only group admins can accept join requests");
         }
 
         if (request.getStatus() != GroupJoinRequestStatus.PENDING) {
             throw new ChatException(ChatException.INVALID_COMMAND, "Request is not pending");
+        }
+
+        if (groupBlockRepository.existsByGroupIdAndUserId(request.getGroupId(), request.getUserId())) {
+            throw new ChatException(ChatException.USER_BLOCKED, "This user is blocked from the group");
         }
 
         request.setStatus(GroupJoinRequestStatus.ACCEPTED);
@@ -110,8 +121,8 @@ public class GroupJoinRequestService {
         ConversationMemberEntity adminMember = memberRepository.findByConversationIdAndUserId(request.getGroupId(), adminUserId)
             .orElseThrow(() -> new ChatException(ChatException.NOT_MEMBER, "You are not a member of this group"));
 
-        if (adminMember.getRole() != MemberRole.OWNER) {
-            throw new ChatException(ChatException.FORBIDDEN, "Only group owners can reject join requests");
+        if (!isAdmin(adminMember)) {
+            throw new ChatException(ChatException.FORBIDDEN, "Only group admins can reject join requests");
         }
 
         if (request.getStatus() != GroupJoinRequestStatus.PENDING) {
@@ -132,8 +143,8 @@ public class GroupJoinRequestService {
         ConversationMemberEntity adminMember = memberRepository.findByConversationIdAndUserId(groupId, adminUserId)
             .orElseThrow(() -> new ChatException(ChatException.NOT_MEMBER, "You are not a member of this group"));
 
-        if (adminMember.getRole() != MemberRole.OWNER) {
-            throw new ChatException(ChatException.FORBIDDEN, "Only group owners can view join requests");
+        if (!isAdmin(adminMember)) {
+            throw new ChatException(ChatException.FORBIDDEN, "Only group admins can view join requests");
         }
 
         List<GroupJoinRequestEntity> requests = groupJoinRequestRepository.findByGroupIdAndStatusOrderByCreatedAtDesc(
@@ -187,6 +198,8 @@ public class GroupJoinRequestService {
 
             if (memberRepository.existsByConversationIdAndUserId(group.getId(), userId)) {
                 membershipStatus = "MEMBER";
+            } else if (groupBlockRepository.existsByGroupIdAndUserId(group.getId(), userId)) {
+                membershipStatus = "BLOCKED";
             } else if (groupJoinRequestRepository.existsByGroupIdAndUserId(group.getId(), userId)) {
                 membershipStatus = "PENDING";
             }
@@ -198,12 +211,17 @@ public class GroupJoinRequestService {
                 group.getAvatarUrl(),
                 memberCount,
                 group.getType().name(),
+                group.isPrivate(),
                 membershipStatus,
                 group.getCreatedAt()
             ));
         }
 
         return responses;
+    }
+
+    private static boolean isAdmin(ConversationMemberEntity member) {
+        return member.getRole() == MemberRole.OWNER || member.getRole() == MemberRole.MODERATOR;
     }
 
     private GroupJoinRequestResponse mapToJoinRequestResponse(GroupJoinRequestEntity req, ConversationEntity group, UserEntity user) {

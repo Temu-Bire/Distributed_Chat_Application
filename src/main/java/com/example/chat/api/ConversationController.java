@@ -6,10 +6,13 @@ import com.example.chat.application.GroupInvitationService;
 import com.example.chat.application.GroupJoinRequestService;
 import com.example.chat.dto.auth.UserProfileResponse;
 import com.example.chat.dto.conversation.*;
+import com.example.chat.dto.group.BlockedUserResponse;
+import com.example.chat.dto.group.BlockUserRequest;
 import com.example.chat.dto.group.GroupDiscoveryResponse;
 import com.example.chat.dto.group.GroupInvitationResponse;
 import com.example.chat.dto.group.GroupJoinRequestResponse;
 import com.example.chat.dto.group.InviteToGroupRequest;
+import com.example.chat.domain.entity.MemberRole;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -145,6 +148,52 @@ public class ConversationController {
         UserProfileResponse user = authService.getCurrentUser(principal);
         conversationService.markAsRead(conversationId, user.id());
         return ResponseEntity.ok(Map.of("message", "Marked as read"));
+    }
+
+    @PostMapping("/groups/{id}/join")
+    public ResponseEntity<ConversationSummaryResponse> joinGroup(
+            Principal principal,
+            @PathVariable("id") UUID groupId) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        return ResponseEntity.ok(conversationService.joinGroup(groupId, user.id()));
+    }
+
+    @PutMapping("/groups/{id}/members/{userId}/role")
+    public ResponseEntity<ConversationMemberResponse> setMemberRole(
+            Principal principal,
+            @PathVariable("id") UUID groupId,
+            @PathVariable("userId") UUID memberId,
+            @RequestParam("role") MemberRole role) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        return ResponseEntity.ok(conversationService.setMemberRole(groupId, user.id(), memberId, role));
+    }
+
+    @PostMapping("/groups/{id}/blocks")
+    public ResponseEntity<Map<String, String>> blockMember(
+            Principal principal,
+            @PathVariable("id") UUID groupId,
+            @Valid @RequestBody BlockUserRequest request) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        conversationService.blockMember(groupId, user.id(), request.userId());
+        return ResponseEntity.ok(Map.of("message", "User blocked from group"));
+    }
+
+    @DeleteMapping("/groups/{id}/blocks/{userId}")
+    public ResponseEntity<Map<String, String>> unblockMember(
+            Principal principal,
+            @PathVariable("id") UUID groupId,
+            @PathVariable("userId") UUID memberId) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        conversationService.unblockMember(groupId, user.id(), memberId);
+        return ResponseEntity.ok(Map.of("message", "User unblocked"));
+    }
+
+    @GetMapping("/groups/{id}/blocks")
+    public ResponseEntity<List<BlockedUserResponse>> getBlockedMembers(
+            Principal principal,
+            @PathVariable("id") UUID groupId) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        return ResponseEntity.ok(conversationService.getBlockedMembers(groupId, user.id()));
     }
 
     @GetMapping("/groups/discover")

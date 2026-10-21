@@ -16,5 +16,11 @@ public record CreateGroupRequest(
     @Size(max = 255, message = "Avatar URL must be at most 255 characters")
     String avatarUrl,
 
-    List<UUID> memberIds
-) {}
+    List<UUID> memberIds,
+
+    Boolean isPrivate
+) {
+    public CreateGroupRequest(String title, String description, String avatarUrl, List<UUID> memberIds) {
+        this(title, description, avatarUrl, memberIds, null);
+    }
+}

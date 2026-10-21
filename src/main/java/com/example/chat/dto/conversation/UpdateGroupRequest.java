@@ -12,5 +12,11 @@ public record UpdateGroupRequest(
     String description,
 
     @Size(max = 255, message = "Avatar URL must be at most 255 characters")
-    String avatarUrl
-) {}
+    String avatarUrl,
+
+    Boolean isPrivate
+) {
+    public UpdateGroupRequest(String title, String description, String avatarUrl) {
+        this(title, description, avatarUrl, null);
+    }
+}
