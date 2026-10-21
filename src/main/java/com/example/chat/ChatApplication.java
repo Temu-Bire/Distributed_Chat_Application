@@ -1,6 +1,7 @@
 package com.example.chat;
 
 import com.example.chat.config.ChatProperties;
+import com.example.chat.config.RateLimitProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -15,7 +16,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
  * multi-instance deployment.</p>
  */
 @SpringBootApplication
-@EnableConfigurationProperties(ChatProperties.class)
+@EnableConfigurationProperties({ChatProperties.class, RateLimitProperties.class})
 public class ChatApplication {
 
     public static void main(String[] args) {

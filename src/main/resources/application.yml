@@ -29,6 +29,12 @@ app:
 chat:
   distributed:
     enabled: ${CHAT_DISTRIBUTED_ENABLED:false}
+  rate-limit:
+    enabled: ${CHAT_RATE_LIMIT_ENABLED:true}
+    login-per-minute: ${RATE_LIMIT_LOGIN:10}
+    register-per-minute: ${RATE_LIMIT_REGISTER:5}
+    friend-request-per-minute: ${RATE_LIMIT_FRIEND_REQUESTS:20}
+    messages-per-minute: ${RATE_LIMIT_MESSAGES:60}
   inbound:
     core-pool-size: 4
     max-pool-size: 16

@@ -9,6 +9,7 @@ import com.example.chat.dto.message.PersistentMessageResponse;
 import com.example.chat.dto.message.ReactionSummaryDto;
 import com.example.chat.exception.ChatException;
 import com.example.chat.infrastructure.redis.DistributedMessageRelay;
+import com.example.chat.security.RateLimiter;
 import com.example.chat.infrastructure.repository.ConversationMemberRepository;
 import com.example.chat.infrastructure.repository.ConversationRepository;
 import com.example.chat.infrastructure.repository.MessageReactionRepository;
@@ -35,19 +36,22 @@ public class PersistentMessageService {
     private final MessageReactionRepository reactionRepository;
     private final SimpMessagingTemplate messagingTemplate;
     private final ObjectProvider<DistributedMessageRelay> relayProvider;
+    private final RateLimiter rateLimiter;
 
     public PersistentMessageService(MessageRepository messageRepository,
                                   ConversationRepository conversationRepository,
                                   ConversationMemberRepository memberRepository,
                                   MessageReactionRepository reactionRepository,
                                   SimpMessagingTemplate messagingTemplate,
-                                  ObjectProvider<DistributedMessageRelay> relayProvider) {
+                                  ObjectProvider<DistributedMessageRelay> relayProvider,
+                                  RateLimiter rateLimiter) {
         this.messageRepository = messageRepository;
         this.conversationRepository = conversationRepository;
         this.memberRepository = memberRepository;
         this.reactionRepository = reactionRepository;
         this.messagingTemplate = messagingTemplate;
         this.relayProvider = relayProvider;
+        this.rateLimiter = rateLimiter;
     }
 
     public PersistentMessageResponse sendMessage(UUID conversationId, UUID senderId, String senderUsername, String content) {
@@ -75,6 +79,14 @@ public class PersistentMessageService {
             if (existing.isPresent()) {
                 return enrich(existing.get());
             }
+        }
+
+        // Only new persists consume the budget, so a client retrying an
+        // unacknowledged send is never punished for the server's silence.
+        RateLimiter.Decision budget = rateLimiter.forMessage(senderId);
+        if (!budget.allowed()) {
+            throw new ChatException(ChatException.RATE_LIMITED,
+                "Sending too quickly - wait " + budget.retryAfterSeconds() + " seconds.");
         }
 
         ConversationMemberEntity member = memberRepository.findByConversationIdAndUserId(conversationId, senderId)

@@ -16,3 +16,9 @@ spring:
     redis:
       repositories:
         enabled: false
+
+chat:
+  # Limits are covered by their own dedicated tests; the behavioural suites
+  # register and message heavily from one IP and must not be throttled.
+  rate-limit:
+    enabled: false
