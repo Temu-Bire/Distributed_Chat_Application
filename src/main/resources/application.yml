@@ -1,6 +1,12 @@
 spring:
   application:
     name: chat-app
+  servlet:
+    multipart:
+      # Spring's 1MB default would reject legitimate images; UploadService
+      # applies the real per-file cap after reading the bytes.
+      max-file-size: ${UPLOAD_MAX_FILE_SIZE:10MB}
+      max-request-size: ${UPLOAD_MAX_REQUEST_SIZE:12MB}
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:h2:file:./data/chatsphere;DB_CLOSE_DELAY=-1;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;AUTO_SERVER=TRUE}
     username: ${SPRING_DATASOURCE_USERNAME:sa}
@@ -38,6 +44,7 @@ server:
 app:
   upload:
     dir: ${UPLOAD_DIR:./uploads}
+    max-bytes: ${UPLOAD_MAX_BYTES:10485760}
 
 chat:
   distributed:

@@ -38,6 +38,9 @@ public class ChatException extends RuntimeException {
     public static final String INVALID_REACTION = "INVALID_REACTION";
     public static final String RATE_LIMITED = "RATE_LIMITED";
 
+    /** An uploaded file was empty, oversized, or not one of the accepted types. */
+    public static final String INVALID_UPLOAD = "INVALID_UPLOAD";
+
     private final String code;
 
     public ChatException(String code, String message) {

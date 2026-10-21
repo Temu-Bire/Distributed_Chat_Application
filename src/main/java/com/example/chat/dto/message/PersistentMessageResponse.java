@@ -18,6 +18,7 @@ public record PersistentMessageResponse(
     boolean forwarded,
     UUID replyToId,
     String replyToContent,
+    AttachmentDto attachment,
     List<ReactionSummaryDto> reactions,
     Instant createdAt,
     Instant editedAt
@@ -36,6 +37,9 @@ public record PersistentMessageResponse(
             false,
             msg.getReplyToId(),
             null,
+            msg.getAttachmentUrl() == null ? null
+                : new AttachmentDto(msg.getAttachmentUrl(), msg.getAttachmentName(), msg.getAttachmentType(),
+                    msg.getAttachmentSize() == null ? 0 : msg.getAttachmentSize()),
             List.of(),
             msg.getCreatedAt(),
             msg.getEditedAt()
@@ -45,14 +49,14 @@ public record PersistentMessageResponse(
     public PersistentMessageResponse withReplyPreview(String preview) {
         return new PersistentMessageResponse(
             id, conversationId, senderId, senderUsername, content,
-            edited, deleted, pinned, readByCount, forwarded, replyToId, preview, reactions, createdAt, editedAt
+            edited, deleted, pinned, readByCount, forwarded, replyToId, preview, attachment, reactions, createdAt, editedAt
         );
     }
 
     public PersistentMessageResponse withReactions(List<ReactionSummaryDto> newReactions) {
         return new PersistentMessageResponse(
             id, conversationId, senderId, senderUsername, content,
-            edited, deleted, pinned, readByCount, forwarded, replyToId, replyToContent, newReactions, createdAt, editedAt
+            edited, deleted, pinned, readByCount, forwarded, replyToId, replyToContent, attachment, newReactions, createdAt, editedAt
         );
     }
 }

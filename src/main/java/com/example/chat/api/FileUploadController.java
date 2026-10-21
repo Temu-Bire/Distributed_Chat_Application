@@ -1,33 +1,27 @@
 package com.example.chat.api;
 
 import com.example.chat.application.AuthService;
+import com.example.chat.application.UploadService;
 import com.example.chat.dto.auth.UserProfileResponse;
 import com.example.chat.exception.ChatException;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.security.Principal;
 import java.util.Map;
-import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/uploads")
 public class FileUploadController {
 
     private final AuthService authService;
+    private final UploadService uploadService;
 
-    @Value("${app.upload.dir:./uploads}")
-    private String uploadDir;
-
-    public FileUploadController(AuthService authService) {
+    public FileUploadController(AuthService authService, UploadService uploadService) {
         this.authService = authService;
+        this.uploadService = uploadService;
     }
 
     @PostMapping("/avatar")
@@ -36,34 +30,21 @@ public class FileUploadController {
             throw new ChatException(ChatException.UNAUTHORIZED, "Not authenticated");
         }
         UserProfileResponse user = authService.getCurrentUser(principal);
+        UploadService.StoredUpload stored = uploadService.store(file, "avatar", user.username() + "-avatar");
+        return ResponseEntity.ok(Map.of("url", stored.url()));
+    }
 
-        if (file.isEmpty()) {
-            throw new ChatException(ChatException.INVALID_MESSAGE, "File cannot be empty");
+    @PostMapping("/media")
+    public ResponseEntity<UploadService.StoredUpload> uploadMedia(@RequestParam("file") MultipartFile file, Principal principal) {
+        if (principal == null) {
+            throw new ChatException(ChatException.UNAUTHORIZED, "Not authenticated");
         }
+        authService.getCurrentUser(principal);
+        return ResponseEntity.status(HttpStatus.CREATED).body(uploadService.store(file, "media", safeName(file)));
+    }
 
-        String contentType = file.getContentType();
-        if (contentType == null || !contentType.startsWith("image/")) {
-            throw new ChatException(ChatException.INVALID_MESSAGE, "Only image files are allowed");
-        }
-
-        try {
-            Path uploadPath = Paths.get(uploadDir).toAbsolutePath().normalize();
-            Files.createDirectories(uploadPath);
-
-            String originalFilename = file.getOriginalFilename();
-            String extension = ".jpg";
-            if (originalFilename != null && originalFilename.contains(".")) {
-                extension = originalFilename.substring(originalFilename.lastIndexOf("."));
-            }
-            String filename = "avatar_" + user.id() + "_" + UUID.randomUUID() + extension;
-            Path filePath = uploadPath.resolve(filename);
-
-            Files.copy(file.getInputStream(), filePath);
-
-            String fileUrl = "/uploads/" + filename;
-            return ResponseEntity.ok(Map.of("url", fileUrl));
-        } catch (IOException e) {
-            throw new ChatException(ChatException.INVALID_MESSAGE, "Failed to upload file");
-        }
+    private static String safeName(MultipartFile file) {
+        String name = file.getOriginalFilename();
+        return name == null || name.isBlank() ? "attachment" : name;
     }
 }

@@ -6,6 +6,7 @@ import com.example.chat.domain.entity.ConversationType;
 import com.example.chat.domain.entity.MemberRole;
 import com.example.chat.domain.entity.MessageEntity;
 import com.example.chat.domain.entity.MessageReactionEntity;
+import com.example.chat.dto.message.AttachmentRefDto;
 import com.example.chat.dto.message.PersistentMessageResponse;
 import com.example.chat.dto.message.ReactionSummaryDto;
 import com.example.chat.exception.ChatException;
@@ -40,6 +41,7 @@ public class PersistentMessageService {
     private final SimpMessagingTemplate messagingTemplate;
     private final ObjectProvider<DistributedMessageRelay> relayProvider;
     private final RateLimiter rateLimiter;
+    private final UploadService uploadService;
 
     public PersistentMessageService(MessageRepository messageRepository,
                                   ConversationRepository conversationRepository,
@@ -47,7 +49,8 @@ public class PersistentMessageService {
                                   MessageReactionRepository reactionRepository,
                                   SimpMessagingTemplate messagingTemplate,
                                   ObjectProvider<DistributedMessageRelay> relayProvider,
-                                  RateLimiter rateLimiter) {
+                                  RateLimiter rateLimiter,
+                                  UploadService uploadService) {
         this.messageRepository = messageRepository;
         this.conversationRepository = conversationRepository;
         this.memberRepository = memberRepository;
@@ -55,6 +58,7 @@ public class PersistentMessageService {
         this.messagingTemplate = messagingTemplate;
         this.relayProvider = relayProvider;
         this.rateLimiter = rateLimiter;
+        this.uploadService = uploadService;
     }
 
     @Transactional
@@ -96,8 +100,26 @@ public class PersistentMessageService {
     @Transactional
     public PersistentMessageResponse sendMessage(UUID conversationId, UUID senderId, String senderUsername, String content,
                                                  UUID replyToId, String clientMessageId, UUID forwardedFromId) {
+        return sendMessage(conversationId, senderId, senderUsername, content, replyToId, clientMessageId, forwardedFromId, null);
+    }
+
+    @Transactional
+    public PersistentMessageResponse sendMessage(UUID conversationId, UUID senderId, String senderUsername, String content,
+                                                 UUID replyToId, String clientMessageId, UUID forwardedFromId,
+                                                 AttachmentRefDto attachment) {
+        UploadService.StoredUpload stored = null;
+        if (attachment != null && attachment.url() != null && !attachment.url().isBlank()) {
+            stored = uploadService.describe(attachment.url());
+            if (stored == null) {
+                throw new ChatException(ChatException.INVALID_UPLOAD, "That attachment was not uploaded to this server");
+            }
+        }
+        boolean hasAttachment = stored != null;
         if (content == null || content.trim().isEmpty()) {
-            throw new ChatException(ChatException.INVALID_MESSAGE, "Message content cannot be blank");
+            if (!hasAttachment) {
+                throw new ChatException(ChatException.INVALID_MESSAGE, "Message content cannot be blank");
+            }
+            content = "";
         }
         if (content.length() > 2000) {
             throw new ChatException(ChatException.INVALID_MESSAGE, "Message must be at most 2000 characters");
@@ -148,10 +170,16 @@ public class PersistentMessageService {
         MessageEntity message = new MessageEntity(conversationId, senderId, senderUsername, content.trim(), replyToId);
         message.setClientMessageId(normalizedClientId);
         message.setForwardedFromId(forwardedFromId);
+        if (stored != null) {
+            message.setAttachmentUrl(stored.url());
+            message.setAttachmentName(stored.name());
+            message.setAttachmentType(stored.type());
+            message.setAttachmentSize(stored.size());
+        }
         message = messageRepository.save(message);
 
         // Update conversation summary
-        conv.setLastMessageText(message.getContent());
+        conv.setLastMessageText(message.getContent().isEmpty() ? "[Attachment]" : message.getContent());
         conv.setLastMessageAt(message.getCreatedAt());
         conv.setLastMessageSender(senderUsername);
         conv.setUpdatedAt(Instant.now());
@@ -397,10 +425,19 @@ public class PersistentMessageService {
             message.getForwardedFromId() != null,
             message.getReplyToId(),
             replyPreview,
+            attachmentOf(message),
             reactionSummaries(List.of(message.getId())).getOrDefault(message.getId(), List.of()),
             message.getCreatedAt(),
             message.getEditedAt()
         );
+    }
+
+    private static com.example.chat.dto.message.AttachmentDto attachmentOf(MessageEntity message) {
+        if (message.getAttachmentUrl() == null) {
+            return null;
+        }
+        return new com.example.chat.dto.message.AttachmentDto(message.getAttachmentUrl(), message.getAttachmentName(),
+            message.getAttachmentType(), message.getAttachmentSize() == null ? 0 : message.getAttachmentSize());
     }
 
     private Map<UUID, List<ReactionSummaryDto>> reactionSummaries(List<UUID> messageIds) {

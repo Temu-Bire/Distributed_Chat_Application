@@ -27,6 +27,11 @@ server:
         http-only: true
         same-site: lax
 
+app:
+  upload:
+    # Keep test uploads out of the working tree; the folder is recreated per run.
+    dir: target/test-uploads
+
 chat:
   # Limits are covered by their own dedicated tests; the behavioural suites
   # register and message heavily from one IP and must not be throttled.

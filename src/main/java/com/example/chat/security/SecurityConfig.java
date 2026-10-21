@@ -55,7 +55,8 @@ public class SecurityConfig {
                     "/app",
                     "/css/**",
                     "/js/**",
-                    "/uploads/**",
+                    // /uploads/** is deliberately NOT public: attachment URLs
+                    // are unguessable but they are still private chat content.
                     "/favicon.ico",
                     "/api/health",
                     "/api/auth/register",

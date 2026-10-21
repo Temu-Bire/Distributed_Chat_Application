@@ -250,6 +250,12 @@
                 </div>
                 <button id="reply-cancel-btn" type="button" class="icon-btn" aria-label="Cancel reply">✕</button>
             </div>
+            <div id="pending-attachment" class="attach-chip" hidden>
+                <span id="pending-attachment-name" class="attach-chip__name"></span>
+                <button id="pending-attachment-remove" class="icon-btn" type="button" aria-label="Remove attachment">&#10005;</button>
+            </div>
+            <input id="attach-input" type="file" hidden
+                   accept="image/png,image/jpeg,image/gif,image/webp,application/pdf">
             <form id="message-send-form" class="composer" autocomplete="off">
                 <div class="composer__field">
                     <button id="emoji-btn" type="button" class="icon-btn composer__icon" aria-label="Insert emoji">

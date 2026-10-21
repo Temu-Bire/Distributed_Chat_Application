@@ -48,7 +48,7 @@ public class MessageController {
         UserProfileResponse user = authService.getCurrentUser(principal);
         PersistentMessageResponse response = messageService.sendMessage(
             conversationId, user.id(), user.username(), request.content(),
-            request.replyToId(), request.clientMessageId()
+            request.replyToId(), request.clientMessageId(), null, request.attachment()
         );
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }

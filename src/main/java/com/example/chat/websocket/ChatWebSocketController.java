@@ -64,7 +64,7 @@ public class ChatWebSocketController {
                                    Principal principal) {
         UserProfileResponse user = authService.getCurrentUser(principal);
         persistentMessageService.sendMessage(conversationId, user.id(), user.username(),
-            request.content(), request.replyToId(), request.clientMessageId());
+            request.content(), request.replyToId(), request.clientMessageId(), null, request.attachment());
     }
 
     /** Ephemeral "is typing" hint; membership-checked and throttled server-side. */

@@ -38,7 +38,8 @@
         typingPeers: new Map(),
         pinned: [],
         search: { open: false, query: '', results: null, conversationId: null, timer: null },
-        pages: {}
+        pages: {},
+        pendingAttachment: null
     };
 
     const $ = (id) => document.getElementById(id);
@@ -411,7 +412,9 @@
             if (msg.replyToContent) {
                 bubble.appendChild(el('div', 'bubble__reply', '↳ ' + msg.replyToContent));
             }
-            bubble.appendChild(el('div', 'bubble__text', msg.deleted ? 'This message was deleted.' : msg.content));
+            const shown = msg.deleted ? 'This message was deleted.' : (msg.content || '');
+            if (shown) bubble.appendChild(el('div', 'bubble__text', shown));
+            if (msg.attachment && !msg.deleted) bubble.appendChild(renderAttachment(msg.attachment));
             const meta = el('div', 'bubble__meta');
             meta.appendChild(el('span', '', formatTime(msg.createdAt) + (msg.edited ? ' · edited' : '')));
             if (mine) meta.appendChild(el('span', 'ticks', msg.readByCount > 0 ? '\u2713\u2713' : '\u2713'));
@@ -852,6 +855,8 @@
         renderPinnedBar();
         loadPinned(id);
         closeChatSearch();
+        state.pendingAttachment = null;
+        renderPendingAttachment();
         if (isGroup(conv) && !conv.myRole) {
             try {
                 const members = await request('/conversations/' + id + '/members');
@@ -1789,7 +1794,12 @@
             input.value += '😊';
             input.focus();
         });
-        $('attach-btn').addEventListener('click', () => toast('File attachments are coming soon'));
+        $('attach-btn').addEventListener('click', () => $('attach-input').click());
+        $('attach-input').addEventListener('change', uploadAttachment);
+        $('pending-attachment-remove').addEventListener('click', () => {
+            state.pendingAttachment = null;
+            renderPendingAttachment();
+        });
         document.querySelectorAll('.group-menu__item').forEach((item) => {
             item.addEventListener('click', () => switchGroupTab(item.dataset.gtab));
         });
@@ -1964,6 +1974,72 @@
         actions.appendChild(cancel);
     }
 
+    function renderAttachment(attachment) {
+        const wrap = el('div', 'attach');
+        if (attachment.type && attachment.type.indexOf('image/') === 0) {
+            const img = document.createElement('img');
+            img.className = 'attach__preview';
+            img.src = attachment.url;
+            img.alt = attachment.name || 'Attached image';
+            img.loading = 'lazy';
+            wrap.appendChild(img);
+        }
+        const link = el('a', 'attach__name', (attachment.name || 'attachment') + ' \u00B7 ' + formatBytes(attachment.size));
+        link.href = attachment.url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        wrap.appendChild(link);
+        return wrap;
+    }
+
+    function formatBytes(bytes) {
+        if (!bytes || bytes < 0) return '0 B';
+        const units = ['B', 'KB', 'MB', 'GB'];
+        let value = bytes;
+        let unit = 0;
+        while (value >= 1024 && unit < units.length - 1) {
+            value /= 1024;
+            unit += 1;
+        }
+        return (unit === 0 ? value : value.toFixed(1)) + ' ' + units[unit];
+    }
+
+    function renderPendingAttachment() {
+        const chip = $('pending-attachment');
+        const attachment = state.pendingAttachment;
+        if (!attachment) {
+            chip.hidden = true;
+            $('pending-attachment-name').textContent = '';
+            return;
+        }
+        chip.hidden = false;
+        $('pending-attachment-name').textContent = attachment.name + ' \u00B7 ' + formatBytes(attachment.size);
+    }
+
+    async function uploadAttachment() {
+        const input = $('attach-input');
+        const file = input.files && input.files[0];
+        if (!file) return;
+        if (file.size > 10 * 1024 * 1024) {
+            toast('Files must be 10 MB or smaller.');
+            input.value = '';
+            return;
+        }
+        const data = new FormData();
+        data.append('file', file);
+        try {
+            const res = await fetch(API + '/uploads/media', { method: 'POST', credentials: 'include', body: data });
+            const payload = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(payload.message || 'Upload failed');
+            state.pendingAttachment = payload;
+            renderPendingAttachment();
+        } catch (err) {
+            toast(err.message);
+        } finally {
+            input.value = '';
+        }
+    }
+
     function setupChat() {
         $('reply-cancel-btn').addEventListener('click', clearReply);
         $('message-content-input').addEventListener('keydown', signalTyping);
@@ -1973,16 +2049,20 @@
             const conv = state.currentConversation;
             const input = $('message-content-input');
             const content = input.value.trim();
-            if (!conv || !content) return;
+            const attachment = state.pendingAttachment;
+            if (!conv || (!content && !attachment)) return;
             const payload = {
                 content: content,
                 replyToId: state.replyTo ? state.replyTo.id : null,
-                clientMessageId: generateClientMessageId()
+                clientMessageId: generateClientMessageId(),
+                attachment: attachment ? { url: attachment.url } : null
             };
             input.value = '';
             clearReply();
+            state.pendingAttachment = null;
+            renderPendingAttachment();
             try {
-                if (state.stomp) {
+                if (state.stomp && !attachment) {
                     state.stomp.send('/app/conversations/' + conv.id + '/send', payload);
                 } else {
                     await withBusy($('message-send-btn'), async () => {
