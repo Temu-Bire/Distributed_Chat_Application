@@ -86,7 +86,32 @@ public class GlobalExceptionHandler {
     /** REST equivalent, used by the HTTP adapters. */
     @ExceptionHandler(ChatException.class)
     public ResponseEntity<ErrorResponse> handleRestChatException(ChatException ex) {
-        return ResponseEntity.badRequest().body(ErrorResponse.of(ex.code(), ex.getMessage()));
+        return ResponseEntity.status(statusFor(ex.code()))
+                .body(ErrorResponse.of(ex.code(), ex.getMessage()));
+    }
+
+    /**
+     * The HTTP status must reflect the failure class: authorization failures
+     * returning 400 hide privilege-escalation attempts from monitoring and
+     * force clients to parse the body just to learn what went wrong.
+     */
+    private static org.springframework.http.HttpStatus statusFor(String code) {
+        return switch (code == null ? "" : code) {
+            case ChatException.UNAUTHORIZED, ChatException.BAD_CREDENTIALS ->
+                    org.springframework.http.HttpStatus.UNAUTHORIZED;
+            case ChatException.FORBIDDEN, ChatException.NOT_MEMBER, ChatException.USER_BLOCKED ->
+                    org.springframework.http.HttpStatus.FORBIDDEN;
+            case ChatException.USER_NOT_FOUND, ChatException.CONVERSATION_NOT_FOUND,
+                 ChatException.MESSAGE_NOT_FOUND, ChatException.REQUEST_NOT_FOUND ->
+                    org.springframework.http.HttpStatus.NOT_FOUND;
+            case ChatException.DUPLICATE_USERNAME, ChatException.DUPLICATE_EMAIL,
+                 ChatException.USERNAME_TAKEN, ChatException.REQUEST_ALREADY_EXISTS,
+                 ChatException.ALREADY_FRIENDS ->
+                    org.springframework.http.HttpStatus.CONFLICT;
+            case ChatException.RATE_LIMITED ->
+                    org.springframework.http.HttpStatus.TOO_MANY_REQUESTS;
+            default -> org.springframework.http.HttpStatus.BAD_REQUEST;
+        };
     }
 
     /** REST Bean Validation exception handler. */

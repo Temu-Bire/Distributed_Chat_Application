@@ -1,6 +1,7 @@
 package com.example.chat.config;
 
 import com.example.chat.application.MessageRouter;
+import com.example.chat.security.StompSubscriptionGuard;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.messaging.simp.config.ChannelRegistration;
 import org.springframework.messaging.simp.config.MessageBrokerRegistry;
@@ -53,9 +54,11 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     private static final long HEARTBEAT_INTERVAL_MS = 10_000L;
 
     private final ChatProperties properties;
+    private final StompSubscriptionGuard subscriptionGuard;
 
-    public WebSocketConfig(ChatProperties properties) {
+    public WebSocketConfig(ChatProperties properties, StompSubscriptionGuard subscriptionGuard) {
         this.properties = properties;
+        this.subscriptionGuard = subscriptionGuard;
     }
 
     @Override
@@ -91,6 +94,8 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     @Override
     public void configureClientInboundChannel(ChannelRegistration registration) {
         registration.taskExecutor(boundedExecutor(properties.inbound(), "ws-inbound-"));
+        // Rejects SUBSCRIBE frames for conversations the caller is not a member of.
+        registration.interceptors(subscriptionGuard);
     }
 
     @Override

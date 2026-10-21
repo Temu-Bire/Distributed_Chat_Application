@@ -32,7 +32,7 @@ import java.util.UUID;
  */
 public class AnonymousHandshakeHandler extends DefaultHandshakeHandler {
 
-    private static final String ANONYMOUS_PREFIX = "anon-";
+    public static final String ANONYMOUS_PREFIX = "anon-";
 
     @Override
     protected Principal determineUser(ServerHttpRequest request, WebSocketHandler wsHandler,

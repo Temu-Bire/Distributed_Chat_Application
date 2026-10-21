@@ -36,6 +36,7 @@ public class ChatException extends RuntimeException {
     public static final String MESSAGE_NOT_FOUND = "MESSAGE_NOT_FOUND";
     public static final String USER_BLOCKED = "USER_BLOCKED";
     public static final String INVALID_REACTION = "INVALID_REACTION";
+    public static final String RATE_LIMITED = "RATE_LIMITED";
 
     private final String code;
 

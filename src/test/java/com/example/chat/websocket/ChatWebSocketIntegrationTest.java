@@ -52,6 +52,9 @@ class ChatWebSocketIntegrationTest {
     @Autowired
     private ObjectMapper objectMapper;
 
+    @Autowired
+    private org.springframework.boot.test.web.client.TestRestTemplate restTemplate;
+
     private final List<StompTestClient> clients = new ArrayList<>();
 
     @AfterEach
@@ -142,8 +145,19 @@ class ChatWebSocketIntegrationTest {
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
+    /**
+     * Opens a real browser-like connection: the client registers a database
+     * user, keeps the session cookie, and sends it with the WebSocket
+     * handshake so the server sees an authenticated principal (subscription
+     * guards reject anonymous subscribers on protected topics).
+     */
     private StompTestClient openClient() throws Exception {
-        StompTestClient client = StompTestClient.connect(port, objectMapper);
+        return openClient(uniqueName("user"));
+    }
+
+    private StompTestClient openClient(String accountName) throws Exception {
+        String cookie = registerAndLogin(accountName);
+        StompTestClient client = StompTestClient.connect(port, objectMapper, cookie);
         clients.add(client);
 
         client.subscribe(USERS_TOPIC, UserPresenceResponse.class);
@@ -152,6 +166,22 @@ class ChatWebSocketIntegrationTest {
 
         assertThat(client.isConnected()).isTrue();
         return client;
+    }
+
+    private String registerAndLogin(String username) {
+        org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+        headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
+        java.util.Map<String, Object> body = java.util.Map.of(
+                "username", username,
+                "displayName", username,
+                "email", username + "@ws-test.local",
+                "password", "Password123!");
+        var response = restTemplate.postForEntity("/api/auth/register",
+                new org.springframework.http.HttpEntity<>(body, headers), String.class);
+        assertThat(response.getStatusCode()).isEqualTo(org.springframework.http.HttpStatus.CREATED);
+        String setCookie = response.getHeaders().getFirst(org.springframework.http.HttpHeaders.SET_COOKIE);
+        assertThat(setCookie).as("session cookie on registration").isNotNull();
+        return setCookie.substring(0, setCookie.indexOf(';'));
     }
 
     private StompTestClient joinAs(String username) throws Exception {

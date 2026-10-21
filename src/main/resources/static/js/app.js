@@ -1366,6 +1366,9 @@
             }
             state.conversations.forEach((conv) => subscribeConversation(conv.id));
         }, () => {
+            // Stop reconnecting once the user has logged out; the server now
+            // refuses subscriptions from anonymous connections anyway.
+            if (!state.user) return;
             setTimeout(connectWebSocket, 4000);
         });
     }

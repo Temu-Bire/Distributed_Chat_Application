@@ -8,6 +8,7 @@ import org.springframework.messaging.simp.stomp.StompSession;
 import org.springframework.messaging.simp.stomp.StompSessionHandlerAdapter;
 import org.springframework.web.socket.client.standard.StandardWebSocketClient;
 import org.springframework.web.socket.messaging.WebSocketStompClient;
+import org.springframework.web.socket.WebSocketHttpHeaders;
 
 import java.lang.reflect.Type;
 import java.time.Duration;
@@ -42,6 +43,16 @@ public final class StompTestClient implements AutoCloseable {
     }
 
     public static StompTestClient connect(int port, ObjectMapper objectMapper) throws Exception {
+        return connect(port, objectMapper, null);
+    }
+
+    /**
+     * Connects to {@code /ws}. When {@code sessionCookie} (e.g.
+     * {@code "JSESSIONID=..."}) is supplied it is sent with the handshake, so
+     * the server resolves the real logged-in user for this connection - the
+     * same thing a browser does automatically.
+     */
+    public static StompTestClient connect(int port, ObjectMapper objectMapper, String sessionCookie) throws Exception {
         MappingJackson2MessageConverter converter = new MappingJackson2MessageConverter();
         converter.setObjectMapper(objectMapper);
 
@@ -49,8 +60,13 @@ public final class StompTestClient implements AutoCloseable {
         stompClient.setMessageConverter(converter);
         stompClient.setInboundMessageSizeLimit(1024 * 1024);
 
+        WebSocketHttpHeaders headers = new WebSocketHttpHeaders();
+        if (sessionCookie != null && !sessionCookie.isBlank()) {
+            headers.add("Cookie", sessionCookie);
+        }
+
         StompSession session = stompClient
-                .connectAsync("ws://localhost:" + port + "/ws", new StompSessionHandlerAdapter() { })
+                .connectAsync("ws://localhost:" + port + "/ws", headers, new StompSessionHandlerAdapter() { })
                 .get(CONNECT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
 
         return new StompTestClient(stompClient, session);
