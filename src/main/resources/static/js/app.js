@@ -16,7 +16,8 @@
 
     const state = {
         user: null,
-        conversations: [],
+        conversations: null,
+        messagesLoading: false,
         friends: [],
         incoming: [],
         outgoing: [],
@@ -43,6 +44,18 @@
         if (className) node.className = className;
         if (text != null) node.textContent = text;
         return node;
+    }
+
+    async function withBusy(button, work) {
+        if (!button) return work();
+        button.disabled = true;
+        button.classList.add('is-busy');
+        try {
+            return await work();
+        } finally {
+            button.disabled = false;
+            button.classList.remove('is-busy');
+        }
     }
 
     function setAvatar(node, name, url) {
@@ -215,6 +228,12 @@
         const list = $('conversation-list');
         while (list.firstChild) list.removeChild(list.firstChild);
         const query = ($('conv-search').value || '').toLowerCase();
+        if (state.conversations == null) {
+            list.setAttribute('aria-busy', 'true');
+            list.appendChild(el('li', 'empty loading-row', 'Loading conversations\u2026'));
+            return;
+        }
+        list.removeAttribute('aria-busy');
         const items = state.conversations.filter((conv) => {
             const group = isGroup(conv);
             if (state.filter === 'private' && group) return false;
@@ -224,7 +243,10 @@
             return !query || title.includes(query) || preview.includes(query);
         });
         if (!items.length) {
-            list.appendChild(el('li', 'empty', 'No conversations yet'));
+            const filtered = query || state.filter !== 'all';
+            list.appendChild(el('li', 'empty', filtered
+                ? 'No conversations match your search'
+                : 'No conversations yet \u2014 start one from Friends'));
             return;
         }
         items.forEach((conv) => {
@@ -364,6 +386,13 @@
         const conv = state.currentConversation;
         if (!conv) return;
         const items = state.messages.get(conv.id) || [];
+        thread.setAttribute('aria-busy', state.messagesLoading ? 'true' : 'false');
+        if (!items.length) {
+            thread.appendChild(el('div',
+                'empty' + (state.messagesLoading ? ' loading-row' : ''),
+                state.messagesLoading ? 'Loading messages\u2026' : 'No messages yet \u2014 say hello'));
+            return;
+        }
         items.forEach((msg) => {
             const mine = state.user && msg.senderId === state.user.id;
             const row = el('div', 'msg-row ' + (mine ? 'msg-row--out' : 'msg-row--in'));
@@ -526,7 +555,7 @@
         if (idx >= 0) list[idx] = msg;
         else list.push(msg);
         state.messages.set(msg.conversationId, list);
-        const conv = state.conversations.find((item) => item.id === msg.conversationId);
+        const conv = (state.conversations || []).find((item) => item.id === msg.conversationId);
         if (conv) {
             conv.lastMessageText = msg.deleted ? 'This message was deleted.' : msg.content;
             conv.lastMessageAt = msg.createdAt;
@@ -538,7 +567,7 @@
     }
 
     async function openConversation(id) {
-        const conv = state.conversations.find((item) => item.id === id);
+        const conv = (state.conversations || []).find((item) => item.id === id);
         if (!conv) return;
         state.currentConversation = conv;
         $('dashboard-view').hidden = true;
@@ -565,12 +594,18 @@
                 conv.myRole = null;
             }
         }
+        if (!state.messages.has(id)) {
+            state.messagesLoading = true;
+            renderMessages();
+        }
         try {
             const messages = await request('/conversations/' + id + '/messages?size=50');
             state.messages.set(id, messages);
-            renderMessages();
         } catch (err) {
             toast(err.message);
+        } finally {
+            state.messagesLoading = false;
+            renderMessages();
         }
     }
 
@@ -1364,7 +1399,7 @@
             if (state.user) {
                 client.send(DEST.JOIN, { username: state.user.username });
             }
-            state.conversations.forEach((conv) => subscribeConversation(conv.id));
+            (state.conversations || []).forEach((conv) => subscribeConversation(conv.id));
         }, () => {
             // Stop reconnecting once the user has logged out; the server now
             // refuses subscriptions from anonymous connections anyway.
@@ -1383,14 +1418,16 @@
         $('login-form').addEventListener('submit', async (event) => {
             event.preventDefault();
             try {
-                await request('/auth/login', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                        email: $('login-email').value,
-                        password: $('login-password').value
-                    })
+                await withBusy($('login-submit'), async () => {
+                    await request('/auth/login', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            email: $('login-email').value,
+                            password: $('login-password').value
+                        })
+                    });
+                    await bootAuthenticated();
                 });
-                await bootAuthenticated();
             } catch (err) {
                 showError($('login-error'), err.message);
             }
@@ -1398,16 +1435,18 @@
         $('register-form').addEventListener('submit', async (event) => {
             event.preventDefault();
             try {
-                await request('/auth/register', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                        username: $('reg-username').value,
-                        displayName: $('reg-displayname').value,
-                        email: $('reg-email').value,
-                        password: $('reg-password').value
-                    })
+                await withBusy($('register-submit'), async () => {
+                    await request('/auth/register', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            username: $('reg-username').value,
+                            displayName: $('reg-displayname').value,
+                            email: $('reg-email').value,
+                            password: $('reg-password').value
+                        })
+                    });
+                    await bootAuthenticated();
                 });
-                await bootAuthenticated();
             } catch (err) {
                 showError($('register-error'), err.message);
             }
@@ -1636,11 +1675,13 @@
                 if (state.stomp) {
                     state.stomp.send('/app/conversations/' + conv.id + '/send', payload);
                 } else {
-                    const msg = await request('/conversations/' + conv.id + '/messages', {
-                        method: 'POST',
-                        body: JSON.stringify(payload)
+                    await withBusy($('message-send-btn'), async () => {
+                        const msg = await request('/conversations/' + conv.id + '/messages', {
+                            method: 'POST',
+                            body: JSON.stringify(payload)
+                        });
+                        upsertMessage(msg);
                     });
-                    upsertMessage(msg);
                 }
             } catch (err) {
                 toast(err.message);
@@ -1660,16 +1701,18 @@
         $('theme-dark').addEventListener('click', () => applyTheme('dark'));
         $('save-prefs-btn').addEventListener('click', async () => {
             try {
-                await request('/settings', {
-                    method: 'PUT',
-                    body: JSON.stringify({
-                        theme: state.theme,
-                        notificationsEnabled: $('pref-notifications').checked,
-                        soundEnabled: $('pref-sound').checked,
-                        onlineVisibility: $('pref-online').checked
-                    })
+                await withBusy($('save-prefs-btn'), async () => {
+                    await request('/settings', {
+                        method: 'PUT',
+                        body: JSON.stringify({
+                            theme: state.theme,
+                            notificationsEnabled: $('pref-notifications').checked,
+                            soundEnabled: $('pref-sound').checked,
+                            onlineVisibility: $('pref-online').checked
+                        })
+                    });
+                    toast('Preferences saved');
                 });
-                toast('Preferences saved');
             } catch (err) {
                 toast(err.message);
             }
@@ -1677,17 +1720,19 @@
         $('profile-form').addEventListener('submit', async (event) => {
             event.preventDefault();
             try {
-                state.user = await request('/users/profile', {
-                    method: 'PUT',
-                    body: JSON.stringify({
-                        displayName: $('profile-displayname').value,
-                        bio: $('profile-bio').value,
-                        avatarUrl: state.user.avatarUrl
-                    })
+                await withBusy(event.submitter, async () => {
+                    state.user = await request('/users/profile', {
+                        method: 'PUT',
+                        body: JSON.stringify({
+                            displayName: $('profile-displayname').value,
+                            bio: $('profile-bio').value,
+                            avatarUrl: state.user.avatarUrl
+                        })
+                    });
+                    updateProfileChrome();
+                    showError($('profile-error'), '');
+                    toast('Profile saved');
                 });
-                updateProfileChrome();
-                showError($('profile-error'), '');
-                toast('Profile saved');
             } catch (err) {
                 showError($('profile-error'), err.message);
             }

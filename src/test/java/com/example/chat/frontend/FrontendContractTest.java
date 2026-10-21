@@ -62,6 +62,21 @@ class FrontendContractTest {
                 .doesNotContainPattern("(?i)\\.(innerHTML|outerHTML|insertAdjacentHTML)\\s*=");
     }
 
+    @Test
+    @DisplayName("the client page stays zoomable and the script distinguishes loading from empty")
+    void accessibilityAndLoadingContract() throws IOException {
+        String html = Files.readString(Path.of("src/main/resources/static/index.html"), StandardCharsets.UTF_8);
+        assertThat(html)
+                .as("blocking zoom breaks WCAG 1.4.4 for low-vision users")
+                .doesNotContain("user-scalable=no")
+                .doesNotContain("maximum-scale");
+
+        String js = Files.readString(CHAT_JS, StandardCharsets.UTF_8);
+        assertThat(js).as("conversation list must show a loading state before the first fetch lands")
+                .contains("loading-row")
+                .contains("aria-busy");
+    }
+
     /** Pulls the {@code DEST} freeze block out of the script. */
     private static Map<String, String> destinationsIn(String source) {
         Matcher map = DEST_MAP.matcher(source);
