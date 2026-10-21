@@ -91,4 +91,20 @@ class MessageSearchTest {
         assertThat(messageService.searchMessages(direct.id(), alice.id(), "10%", 10)).isEmpty();
         assertThat(messageService.searchMessages(direct.id(), alice.id(), "10", 10)).hasSize(1);
     }
+
+    @Test
+    @DisplayName("older pages load next-oldest messages without overlap or gaps")
+    void pagesWalkBackwards() {
+        for (int i = 1; i <= 5; i++) {
+            messageService.sendMessage(direct.id(), alice.id(), alice.username(), "Note " + i);
+        }
+
+        List<PersistentMessageResponse> newest = messageService.getMessages(direct.id(), alice.id(), 0, 2);
+        List<PersistentMessageResponse> older = messageService.getMessages(direct.id(), alice.id(), 1, 2);
+        List<PersistentMessageResponse> oldest = messageService.getMessages(direct.id(), alice.id(), 2, 2);
+
+        assertThat(newest).extracting(PersistentMessageResponse::content).containsExactly("Note 4", "Note 5");
+        assertThat(older).extracting(PersistentMessageResponse::content).containsExactly("Note 2", "Note 3");
+        assertThat(oldest).extracting(PersistentMessageResponse::content).containsExactly("Note 1");
+    }
 }

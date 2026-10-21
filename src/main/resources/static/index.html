@@ -235,6 +235,11 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
                 </button>
             </header>
+            <div id="chat-search" class="chat-search" hidden>
+                <input id="chat-search-input" type="search" placeholder="Search in this conversation" aria-label="Search messages in this conversation">
+                <button id="chat-search-close" class="icon-btn" type="button" aria-label="Close message search">&#10005;</button>
+                <div id="chat-search-results" class="chat-search__results" role="list" aria-label="Search results"></div>
+            </div>
             <div id="chat-pinned" class="pinned-bar" role="status" hidden></div>
             <div id="chat-typing" class="typing-bar" role="status" aria-live="polite" hidden></div>
             <div id="chat-messages" class="chat-thread" aria-live="polite"></div>

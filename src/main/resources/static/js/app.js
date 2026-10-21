@@ -36,7 +36,9 @@
         directory: [],
         replyTo: null,
         typingPeers: new Map(),
-        pinned: []
+        pinned: [],
+        search: { open: false, query: '', results: null, conversationId: null, timer: null },
+        pages: {}
     };
 
     const $ = (id) => document.getElementById(id);
@@ -450,7 +452,119 @@
             }
             thread.appendChild(row);
         });
+        const convPage = state.pages[conv.id];
+        if (convPage && !convPage.exhausted && !state.messagesLoading) {
+            const more = el('button', 'load-older', convPage.loading ? 'Loading older messages...' : 'Load older messages');
+            more.type = 'button';
+            more.addEventListener('click', loadOlderMessages);
+            thread.insertBefore(more, thread.firstChild);
+        }
         thread.scrollTop = thread.scrollHeight;
+    }
+
+    // ---------- in-conversation search ----------
+
+    function toggleChatSearch() {
+        state.search.open = !state.search.open;
+        $('chat-search').hidden = !state.search.open;
+        if (state.search.open) $('chat-search-input').focus();
+        else renderSearchResults();
+    }
+
+    function closeChatSearch() {
+        state.search.open = false;
+        state.search.query = '';
+        state.search.results = null;
+        state.search.conversationId = null;
+        $('chat-search').hidden = true;
+        $('chat-search-input').value = '';
+        renderSearchResults();
+    }
+
+    function onSearchInput() {
+        if (state.search.timer) clearTimeout(state.search.timer);
+        state.search.timer = setTimeout(runConversationSearch, 300);
+    }
+
+    async function runConversationSearch() {
+        const conv = state.currentConversation;
+        const q = $('chat-search-input').value.trim();
+        state.search.query = q;
+        if (!conv || q.length < 2) {
+            state.search.results = null;
+            renderSearchResults();
+            return;
+        }
+        try {
+            const results = await request('/conversations/' + conv.id + '/messages/search?q=' + encodeURIComponent(q) + '&limit=25');
+            if (state.search.query !== q) return;
+            state.search.results = results;
+            state.search.conversationId = conv.id;
+            renderSearchResults();
+        } catch (err) {
+            state.search.results = null;
+            renderSearchResults();
+            toast(err.message);
+        }
+    }
+
+    function renderSearchResults() {
+        const box = $('chat-search-results');
+        while (box.firstChild) box.removeChild(box.firstChild);
+        if (!state.search.open) return;
+        const conv = state.currentConversation;
+        const stale = !conv || String(state.search.conversationId) !== String(conv.id);
+        const results = stale ? null : state.search.results;
+        if (results == null) {
+            box.appendChild(el('div', 'chat-search__hint', 'Type at least two characters to search this conversation.'));
+            return;
+        }
+        if (!results.length) {
+            box.appendChild(el('div', 'chat-search__hint', 'No matching messages.'));
+            return;
+        }
+        results.forEach((msg) => {
+            const item = el('button', 'chat-search__item');
+            item.type = 'button';
+            item.appendChild(el('strong', 'chat-search__who', (msg.senderUsername || 'User') + ' · ' + formatTime(msg.createdAt)));
+            item.appendChild(el('span', 'chat-search__text', msg.deleted ? 'This message was deleted.' : msg.content));
+            item.addEventListener('click', () => jumpToMessage(msg.id));
+            box.appendChild(item);
+        });
+    }
+
+    function jumpToMessage(messageId) {
+        const target = document.querySelector('#chat-messages [data-msg-id="' + messageId + '"]');
+        if (!target) {
+            toast('Open an older page of messages to find this one.');
+            return;
+        }
+        target.scrollIntoView({ block: 'center' });
+        target.classList.add('msg-row--flash');
+        setTimeout(() => target.classList.remove('msg-row--flash'), 1600);
+    }
+
+    async function loadOlderMessages() {
+        const conv = state.currentConversation;
+        if (!conv) return;
+        const page = state.pages[conv.id];
+        if (!page || page.loading || page.exhausted) return;
+        page.loading = true;
+        renderMessages();
+        try {
+            const older = await request('/conversations/' + conv.id + '/messages?page=' + page.next + '&size=50');
+            if (older.length === 0) page.exhausted = true;
+            else state.messages.set(conv.id, older.concat(state.messages.get(conv.id) || []));
+            page.next += 1;
+            page.loading = false;
+            renderMessages();
+            const thread = $('chat-messages');
+            thread.scrollTop = 60;
+        } catch (err) {
+            page.loading = false;
+            renderMessages();
+            toast(err.message);
+        }
     }
 
     function isAdminConversation(conv) {
@@ -469,14 +583,7 @@
             const line = el('div', 'pinned-bar__row');
             const label = el('button', 'pinned-bar__label', 'Pinned: ' + (msg.deleted ? 'deleted message' : msg.content));
             label.type = 'button';
-            label.addEventListener('click', () => {
-                const target = document.querySelector('#chat-messages [data-msg-id="' + msg.id + '"]');
-                if (target) {
-                    target.scrollIntoView({ block: 'center' });
-                    target.classList.add('msg-row--flash');
-                    setTimeout(() => target.classList.remove('msg-row--flash'), 1600);
-                }
-            });
+            label.addEventListener('click', () => jumpToMessage(msg.id));
             line.appendChild(label);
             const unpin = el('button', 'pill pill-mute', 'Unpin');
             unpin.type = 'button';
@@ -698,6 +805,7 @@
         state.pinned = [];
         renderPinnedBar();
         loadPinned(id);
+        closeChatSearch();
         if (isGroup(conv) && !conv.myRole) {
             try {
                 const members = await request('/conversations/' + id + '/members');
@@ -714,6 +822,7 @@
         try {
             const messages = await request('/conversations/' + id + '/messages?size=50');
             state.messages.set(id, messages);
+            state.pages[id] = { next: 1, loading: false, exhausted: messages.length < 50 };
         } catch (err) {
             toast(err.message);
         } finally {
@@ -1618,7 +1727,17 @@
         });
         $('new-chat-btn').addEventListener('click', openNewPrivateModal);
         $('chat-call-btn').addEventListener('click', () => toast('Voice calls are coming soon'));
-        $('chat-search-btn').addEventListener('click', () => $('conv-search').focus());
+        $('chat-search-btn').addEventListener('click', toggleChatSearch);
+        $('chat-search-close').addEventListener('click', closeChatSearch);
+        $('chat-search-input').addEventListener('input', onSearchInput);
+        $('chat-search-input').addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                runConversationSearch();
+            } else if (event.key === 'Escape') {
+                closeChatSearch();
+            }
+        });
         $('emoji-btn').addEventListener('click', () => {
             const input = $('message-content-input');
             input.value += '😊';
