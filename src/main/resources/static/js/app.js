@@ -34,7 +34,8 @@
         groupMembers: [],
         groupBlocked: [],
         directory: [],
-        replyTo: null
+        replyTo: null,
+        typingPeers: new Map()
     };
 
     const $ = (id) => document.getElementById(id);
@@ -448,6 +449,55 @@
 
     function isAdminConversation(conv) {
         return !!conv && (conv.myRole === 'OWNER' || conv.myRole === 'MODERATOR');
+    }
+
+    let lastTypingSentAt = 0;
+    let typingStopTimer = null;
+
+    function signalTyping() {
+        const conv = state.currentConversation;
+        if (!conv || !state.stomp) return;
+        const now = Date.now();
+        if (now - lastTypingSentAt > 1500) {
+            lastTypingSentAt = now;
+            state.stomp.send('/app/conversations/' + conv.id + '/typing', { typing: true });
+        }
+        if (typingStopTimer) clearTimeout(typingStopTimer);
+        typingStopTimer = setTimeout(() => {
+            lastTypingSentAt = 0;
+            if (state.stomp) state.stomp.send('/app/conversations/' + conv.id + '/typing', { typing: false });
+        }, 3000);
+    }
+
+    function recordTyping(conversationId, username, typing) {
+        if (username && state.user && username === state.user.username) return;
+        let peers = state.typingPeers.get(conversationId);
+        if (!peers) {
+            peers = new Map();
+            state.typingPeers.set(conversationId, peers);
+        }
+        if (typing) peers.set(username, Date.now());
+        else peers.delete(username);
+        renderTypingBar();
+    }
+
+    function renderTypingBar() {
+        const bar = $('chat-typing');
+        const conv = state.currentConversation;
+        if (!bar || !conv) return;
+        const peers = state.typingPeers.get(conv.id) || new Map();
+        const now = Date.now();
+        peers.forEach((seen, name) => { if (now - seen > 6000) peers.delete(name); });
+        const names = [...peers.keys()];
+        if (!names.length) {
+            bar.hidden = true;
+            bar.textContent = '';
+            return;
+        }
+        bar.hidden = false;
+        bar.textContent = (names.length === 1
+            ? names[0] + ' is typing'
+            : names.slice(0, 3).join(', ') + ' are typing') + '\u2026';
     }
 
     function beginReply(msg) {
@@ -1381,6 +1431,8 @@
                 upsertMessage(frame.data);
             } else if (frame.event === 'MESSAGE_DELETED') {
                 removeMessage(frame.data && frame.data.conversationId, frame.data && frame.data.messageId);
+            } else if (frame.event === 'TYPING') {
+                recordTyping(frame.conversationId, frame.data && frame.data.username, frame.data && frame.data.typing);
             }
         });
         state.subscriptions.set(id, dest);
@@ -1658,6 +1710,8 @@
 
     function setupChat() {
         $('reply-cancel-btn').addEventListener('click', clearReply);
+        $('message-content-input').addEventListener('keydown', signalTyping);
+        setInterval(renderTypingBar, 2000);
         $('message-send-form').addEventListener('submit', async (event) => {
             event.preventDefault();
             const conv = state.currentConversation;

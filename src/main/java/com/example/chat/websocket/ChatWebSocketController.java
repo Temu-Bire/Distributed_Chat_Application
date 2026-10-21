@@ -3,9 +3,11 @@ package com.example.chat.websocket;
 import com.example.chat.application.AuthService;
 import com.example.chat.application.ChatService;
 import com.example.chat.application.PersistentMessageService;
+import com.example.chat.application.TypingService;
 import com.example.chat.dto.ChatMessageRequest;
 import com.example.chat.dto.JoinRequest;
 import com.example.chat.dto.auth.UserProfileResponse;
+import com.example.chat.dto.message.TypingDto;
 import com.example.chat.exception.ChatException;
 import jakarta.validation.Valid;
 import org.springframework.messaging.handler.annotation.DestinationVariable;
@@ -37,13 +39,16 @@ public class ChatWebSocketController {
     private final ChatService chatService;
     private final AuthService authService;
     private final PersistentMessageService persistentMessageService;
+    private final TypingService typingService;
 
     public ChatWebSocketController(ChatService chatService,
                                    AuthService authService,
-                                   PersistentMessageService persistentMessageService) {
+                                   PersistentMessageService persistentMessageService,
+                                   TypingService typingService) {
         this.chatService = chatService;
         this.authService = authService;
         this.persistentMessageService = persistentMessageService;
+        this.typingService = typingService;
     }
 
     /** Registers this connection under a display name. */
@@ -60,6 +65,15 @@ public class ChatWebSocketController {
         UserProfileResponse user = authService.getCurrentUser(principal);
         persistentMessageService.sendMessage(conversationId, user.id(), user.username(),
             request.content(), request.replyToId(), request.clientMessageId());
+    }
+
+    /** Ephemeral "is typing" hint; membership-checked and throttled server-side. */
+    @MessageMapping("/conversations/{conversationId}/typing")
+    public void typing(@DestinationVariable UUID conversationId,
+                       @Payload TypingDto request,
+                       Principal principal) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        typingService.notifyTyping(conversationId, user.id(), user.username(), request.typing());
     }
 
     private static String sessionId(SimpMessageHeaderAccessor headers) {
