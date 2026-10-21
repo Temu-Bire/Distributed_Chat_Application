@@ -2,6 +2,8 @@ package com.example.chat.infrastructure.repository;
 
 import com.example.chat.domain.entity.ConversationEntity;
 import com.example.chat.domain.entity.ConversationType;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -25,4 +27,10 @@ public interface ConversationRepository extends JpaRepository<ConversationEntity
     Optional<ConversationEntity> findDirectConversationBetween(@Param("user1Id") UUID user1Id, @Param("user2Id") UUID user2Id);
 
     Optional<ConversationEntity> findFirstByType(ConversationType type);
+
+    @Query("SELECT c FROM ConversationEntity c WHERE c.type = 'GROUP' ORDER BY c.createdAt DESC")
+    Page<ConversationEntity> findGroups(Pageable pageable);
+
+    @Query("SELECT c FROM ConversationEntity c WHERE c.type = 'GROUP' AND LOWER(c.title) LIKE LOWER(CONCAT('%', :query, '%')) ORDER BY c.createdAt DESC")
+    Page<ConversationEntity> findGroupsByTitleContaining(@Param("query") String query, Pageable pageable);
 }

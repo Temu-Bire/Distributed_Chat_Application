@@ -10,7 +10,7 @@ spring:
       ddl-auto: update
     open-in-view: false
   flyway:
-    enabled: ${SPRING_FLYWAY_ENABLED:false}
+    enabled: true
     baseline-on-migrate: true
   data:
     redis:
@@ -20,7 +20,7 @@ spring:
         enabled: false
 
 server:
-  port: ${PORT:8080}
+  port: ${PORT:8081}
 
 app:
   upload:

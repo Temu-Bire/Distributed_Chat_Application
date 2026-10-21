@@ -2,9 +2,17 @@ package com.example.chat.api;
 
 import com.example.chat.application.AuthService;
 import com.example.chat.application.ConversationService;
+import com.example.chat.application.GroupInvitationService;
+import com.example.chat.application.GroupJoinRequestService;
 import com.example.chat.dto.auth.UserProfileResponse;
 import com.example.chat.dto.conversation.*;
+import com.example.chat.dto.group.GroupDiscoveryResponse;
+import com.example.chat.dto.group.GroupInvitationResponse;
+import com.example.chat.dto.group.GroupJoinRequestResponse;
+import com.example.chat.dto.group.InviteToGroupRequest;
 import jakarta.validation.Valid;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -20,10 +28,17 @@ public class ConversationController {
 
     private final ConversationService conversationService;
     private final AuthService authService;
+    private final GroupJoinRequestService groupJoinRequestService;
+    private final GroupInvitationService groupInvitationService;
 
-    public ConversationController(ConversationService conversationService, AuthService authService) {
+    public ConversationController(ConversationService conversationService,
+                                    AuthService authService,
+                                    GroupJoinRequestService groupJoinRequestService,
+                                    GroupInvitationService groupInvitationService) {
         this.conversationService = conversationService;
         this.authService = authService;
+        this.groupJoinRequestService = groupJoinRequestService;
+        this.groupInvitationService = groupInvitationService;
     }
 
     @GetMapping
@@ -130,5 +145,116 @@ public class ConversationController {
         UserProfileResponse user = authService.getCurrentUser(principal);
         conversationService.markAsRead(conversationId, user.id());
         return ResponseEntity.ok(Map.of("message", "Marked as read"));
+    }
+
+    @GetMapping("/groups/discover")
+    public ResponseEntity<List<GroupDiscoveryResponse>> discoverGroups(
+            Principal principal,
+            @RequestParam(name = "q", required = false) String query,
+            @RequestParam(name = "page", defaultValue = "0") int page,
+            @RequestParam(name = "size", defaultValue = "20") int size) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        Pageable pageable = PageRequest.of(page, size);
+        return ResponseEntity.ok(groupJoinRequestService.discoverGroups(user.id(), query, pageable));
+    }
+
+    @PostMapping("/groups/{id}/join-requests")
+    public ResponseEntity<GroupJoinRequestResponse> requestToJoinGroup(
+            Principal principal,
+            @PathVariable("id") UUID groupId) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        GroupJoinRequestResponse response = groupJoinRequestService.requestToJoin(user.id(), groupId);
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+
+    @DeleteMapping("/groups/{id}/join-requests/{requestId}")
+    public ResponseEntity<Map<String, String>> cancelJoinRequest(
+            Principal principal,
+            @PathVariable("id") UUID groupId,
+            @PathVariable("requestId") UUID requestId) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        groupJoinRequestService.cancelJoinRequest(user.id(), requestId);
+        return ResponseEntity.ok(Map.of("message", "Join request cancelled"));
+    }
+
+    @GetMapping("/groups/{id}/join-requests")
+    public ResponseEntity<List<GroupJoinRequestResponse>> getGroupJoinRequests(
+            Principal principal,
+            @PathVariable("id") UUID groupId) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        return ResponseEntity.ok(groupJoinRequestService.getPendingRequestsForGroup(groupId, user.id()));
+    }
+
+    @PostMapping("/groups/{id}/join-requests/{requestId}/accept")
+    public ResponseEntity<GroupJoinRequestResponse> acceptJoinRequest(
+            Principal principal,
+            @PathVariable("id") UUID groupId,
+            @PathVariable("requestId") UUID requestId) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        return ResponseEntity.ok(groupJoinRequestService.acceptJoinRequest(user.id(), requestId));
+    }
+
+    @PostMapping("/groups/{id}/join-requests/{requestId}/reject")
+    public ResponseEntity<GroupJoinRequestResponse> rejectJoinRequest(
+            Principal principal,
+            @PathVariable("id") UUID groupId,
+            @PathVariable("requestId") UUID requestId) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        return ResponseEntity.ok(groupJoinRequestService.rejectJoinRequest(user.id(), requestId));
+    }
+
+    @GetMapping("/join-requests")
+    public ResponseEntity<List<GroupJoinRequestResponse>> getUserJoinRequests(Principal principal) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        return ResponseEntity.ok(groupJoinRequestService.getUserJoinRequests(user.id()));
+    }
+
+    @PostMapping("/groups/{id}/invitations")
+    public ResponseEntity<List<GroupInvitationResponse>> inviteToGroup(
+            Principal principal,
+            @PathVariable("id") UUID groupId,
+            @Valid @RequestBody InviteToGroupRequest request) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        List<GroupInvitationResponse> responses = groupInvitationService.inviteUsers(user.id(), groupId, request);
+        return ResponseEntity.status(HttpStatus.CREATED).body(responses);
+    }
+
+    @GetMapping("/invitations")
+    public ResponseEntity<List<GroupInvitationResponse>> getUserInvitations(Principal principal) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        return ResponseEntity.ok(groupInvitationService.getUserInvitations(user.id()));
+    }
+
+    @PostMapping("/invitations/{id}/accept")
+    public ResponseEntity<GroupInvitationResponse> acceptInvitation(
+            Principal principal,
+            @PathVariable("id") UUID invitationId) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        return ResponseEntity.ok(groupInvitationService.acceptInvitation(user.id(), invitationId));
+    }
+
+    @PostMapping("/invitations/{id}/reject")
+    public ResponseEntity<GroupInvitationResponse> rejectInvitation(
+            Principal principal,
+            @PathVariable("id") UUID invitationId) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        return ResponseEntity.ok(groupInvitationService.rejectInvitation(user.id(), invitationId));
+    }
+
+    @DeleteMapping("/invitations/{id}")
+    public ResponseEntity<Map<String, String>> cancelInvitation(
+            Principal principal,
+            @PathVariable("id") UUID invitationId) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        groupInvitationService.cancelInvitation(user.id(), invitationId);
+        return ResponseEntity.ok(Map.of("message", "Invitation cancelled"));
+    }
+
+    @GetMapping("/groups/{id}/invitations")
+    public ResponseEntity<List<GroupInvitationResponse>> getGroupInvitations(
+            Principal principal,
+            @PathVariable("id") UUID groupId) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        return ResponseEntity.ok(groupInvitationService.getGroupInvitations(groupId, user.id()));
     }
 }

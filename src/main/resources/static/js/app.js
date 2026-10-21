@@ -28,7 +28,10 @@
         view: 'chats',
         subscriptions: new Map(),
         stomp: null,
-        theme: localStorage.getItem('chatsphere-theme') || 'light'
+        theme: localStorage.getItem('chatsphere-theme') || 'light',
+        discoverGroups: [],
+        groupJoinRequests: [],
+        groupInvitations: []
     };
 
     const $ = (id) => document.getElementById(id);
@@ -190,6 +193,10 @@
             $('requests-view').hidden = false;
             $('app-shell').classList.add('show-page');
             loadFriends();
+        } else if (view === 'discover') {
+            $('discover-view').hidden = false;
+            $('app-shell').classList.add('show-page');
+            loadDiscoverGroups();
         } else if (view === 'settings') {
             $('settings-view').hidden = false;
             $('app-shell').classList.add('show-page');
@@ -316,11 +323,13 @@
             return cancel;
         });
         const badge = $('requests-badge');
-        badge.hidden = state.incoming.length === 0;
-        badge.textContent = String(state.incoming.length);
+        const totalRequests = state.incoming.length + state.groupInvitations.length;
+        badge.hidden = totalRequests === 0;
+        badge.textContent = String(totalRequests);
         $('incoming-count').textContent = '(' + state.incoming.length + ')';
         $('outgoing-count').textContent = '(' + state.outgoing.length + ')';
         $('friends-count').textContent = '(' + state.friends.length + ')';
+        $('group-invites-count').textContent = '(' + state.groupInvitations.length + ')';
     }
 
     async function actOnRequest(id, action) {
@@ -420,14 +429,16 @@
     }
 
     async function loadFriends() {
-        const [friends, incoming, outgoing] = await Promise.all([
+        const [friends, incoming, outgoing, invitations] = await Promise.all([
             request('/friends'),
             request('/friends/requests/incoming'),
-            request('/friends/requests/outgoing')
+            request('/friends/requests/outgoing'),
+            request('/conversations/invitations')
         ]);
         state.friends = friends;
         state.incoming = incoming;
         state.outgoing = outgoing;
+        state.groupInvitations = invitations;
         renderFriends();
         renderFriendsSide();
         renderRequests();
@@ -443,6 +454,121 @@
         } catch (err) {
             applyTheme(state.theme);
         }
+    }
+
+    async function loadDiscoverGroups() {
+        const query = $('group-discover-search').value.trim();
+        try {
+            state.discoverGroups = await request('/conversations/groups/discover?q=' + encodeURIComponent(query));
+            renderDiscoverGroups();
+        } catch (err) {
+            toast(err.message);
+        }
+    }
+
+    function renderDiscoverGroups() {
+        const list = $('discover-groups-list');
+        while (list.firstChild) list.removeChild(list.firstChild);
+        if (!state.discoverGroups.length) {
+            list.appendChild(el('div', 'empty', 'No groups found'));
+            return;
+        }
+        state.discoverGroups.forEach((group) => {
+            const row = el('div', 'card-row');
+            const avatar = el('div', 'avatar');
+            setAvatar(avatar, group.title, group.avatarUrl);
+            const mid = el('div');
+            mid.appendChild(el('strong', '', group.title));
+            mid.appendChild(el('span', 'muted', group.memberCount + ' members'));
+            row.appendChild(avatar);
+            row.appendChild(mid);
+            const action = el('div', 'row-gap');
+            if (group.membershipStatus === 'MEMBER') {
+                const open = el('button', 'pill pill-ok', 'Open');
+                open.type = 'button';
+                open.addEventListener('click', () => {
+                    closeModal();
+                    openView('chats', { conversationId: group.id });
+                });
+                action.appendChild(open);
+            } else if (group.membershipStatus === 'PENDING') {
+                const pending = el('span', 'pill pill-mute', 'Pending');
+                action.appendChild(pending);
+            } else {
+                const join = el('button', 'pill pill-ok', 'Request to Join');
+                join.type = 'button';
+                join.addEventListener('click', async () => {
+                    try {
+                        await request('/conversations/groups/' + group.id + '/join-requests', { method: 'POST' });
+                        toast('Join request sent');
+                        group.membershipStatus = 'PENDING';
+                        renderDiscoverGroups();
+                    } catch (err) {
+                        toast(err.message);
+                    }
+                });
+                action.appendChild(join);
+            }
+            row.appendChild(action);
+            list.appendChild(row);
+        });
+    }
+
+    async function loadGroupJoinRequests() {
+        try {
+            state.groupJoinRequests = await request('/conversations/join-requests');
+        } catch (err) {
+            toast(err.message);
+        }
+    }
+
+    function renderGroupInvitationsList() {
+        const list = $('group-invitations-list');
+        while (list.firstChild) list.removeChild(list.firstChild);
+        if (!state.groupInvitations.length) {
+            list.appendChild(el('div', 'empty', 'No group invitations'));
+            return;
+        }
+        state.groupInvitations.forEach((inv) => {
+            const row = el('div', 'card-row');
+            const avatar = el('div', 'avatar');
+            setAvatar(avatar, inv.groupName, inv.groupAvatar);
+            const mid = el('div');
+            mid.appendChild(el('strong', '', inv.groupName));
+            mid.appendChild(el('span', 'muted', 'Invited by ' + inv.inviterDisplayName));
+            row.appendChild(avatar);
+            row.appendChild(mid);
+            const action = el('div', 'row-gap');
+            const accept = el('button', 'pill pill-ok', 'Accept');
+            const reject = el('button', 'pill pill-no', 'Reject');
+            accept.type = 'button';
+            reject.type = 'button';
+            accept.addEventListener('click', async () => {
+                try {
+                    await request('/conversations/invitations/' + inv.id + '/accept', { method: 'POST' });
+                    toast('Invitation accepted');
+                    await loadFriends();
+                    await loadConversations();
+                    renderGroupInvitationsList();
+                } catch (err) {
+                    toast(err.message);
+                }
+            });
+            reject.addEventListener('click', async () => {
+                try {
+                    await request('/conversations/invitations/' + inv.id + '/reject', { method: 'POST' });
+                    toast('Invitation rejected');
+                    await loadFriends();
+                    renderGroupInvitationsList();
+                } catch (err) {
+                    toast(err.message);
+                }
+            });
+            action.appendChild(accept);
+            action.appendChild(reject);
+            row.appendChild(action);
+            list.appendChild(row);
+        });
     }
 
     async function loadInitial() {
@@ -594,34 +720,175 @@
                 }
                 list.appendChild(row);
             });
+
+            const isOwner = members.some(m => m.userId === state.user.id && m.role === 'OWNER');
+            $('group-join-requests-section').hidden = !isOwner;
+            $('group-invitations-section').hidden = !isOwner;
+
+            if (isOwner) {
+                try {
+                    const joinRequests = await request('/conversations/groups/' + conv.id + '/join-requests');
+                    const invitations = await request('/conversations/groups/' + conv.id + '/invitations');
+                    renderGroupJoinRequests(joinRequests);
+                    renderGroupInvitations(invitations);
+                } catch (err) {
+                    console.error('Failed to load join requests/invitations:', err);
+                }
+            }
         } catch (err) {
             toast(err.message);
         }
     }
 
-    function openAddMemberModal() {
-        const conv = state.currentConversation;
-        const { body, actions } = openModal('Add members');
-        const results = el('div', 'card-list');
-        state.friends.forEach((friend) => {
-            const row = el('button', 'card-row');
-            row.type = 'button';
-            row.appendChild(el('strong', '', friend.displayName));
-            row.addEventListener('click', async () => {
+    function renderGroupJoinRequests(requests) {
+        const list = $('group-join-requests-list');
+        while (list.firstChild) list.removeChild(list.firstChild);
+        if (!requests.length) {
+            list.appendChild(el('div', 'empty', 'No pending join requests'));
+            return;
+        }
+        requests.forEach((req) => {
+            const row = el('div', 'card-row');
+            const avatar = el('div', 'avatar');
+            setAvatar(avatar, req.displayName, req.userAvatar);
+            const mid = el('div');
+            mid.appendChild(el('strong', '', req.displayName));
+            mid.appendChild(el('span', 'muted', '@' + req.username));
+            row.appendChild(avatar);
+            row.appendChild(mid);
+            const action = el('div', 'row-gap');
+            const accept = el('button', 'pill pill-ok', 'Accept');
+            const reject = el('button', 'pill pill-no', 'Reject');
+            accept.type = 'button';
+            reject.type = 'button';
+            accept.addEventListener('click', async () => {
                 try {
-                    await request('/conversations/' + conv.id + '/members', {
-                        method: 'POST',
-                        body: JSON.stringify({ userId: friend.id })
-                    });
-                    closeModal();
+                    await request('/conversations/groups/' + req.groupId + '/join-requests/' + req.id + '/accept', { method: 'POST' });
+                    toast('Join request accepted');
                     openGroupManage();
                 } catch (err) {
                     toast(err.message);
                 }
             });
-            results.appendChild(row);
+            reject.addEventListener('click', async () => {
+                try {
+                    await request('/conversations/groups/' + req.groupId + '/join-requests/' + req.id + '/reject', { method: 'POST' });
+                    toast('Join request rejected');
+                    openGroupManage();
+                } catch (err) {
+                    toast(err.message);
+                }
+            });
+            action.appendChild(accept);
+            action.appendChild(reject);
+            row.appendChild(action);
+            list.appendChild(row);
         });
+    }
+
+    function renderGroupInvitations(invitations) {
+        const list = $('group-invitations-list');
+        while (list.firstChild) list.removeChild(list.firstChild);
+        if (!invitations.length) {
+            list.appendChild(el('div', 'empty', 'No pending invitations'));
+            return;
+        }
+        invitations.forEach((inv) => {
+            const row = el('div', 'card-row');
+            const avatar = el('div', 'avatar');
+            setAvatar(avatar, inv.inviterDisplayName, inv.inviterAvatar);
+            const mid = el('div');
+            mid.appendChild(el('strong', '', inv.inviterDisplayName));
+            mid.appendChild(el('span', 'muted', 'Invited: ' + (inv.invitedUserId ? 'User' : 'Unknown')));
+            row.appendChild(avatar);
+            row.appendChild(mid);
+            const cancel = el('button', 'pill pill-mute', 'Cancel');
+            cancel.type = 'button';
+            cancel.addEventListener('click', async () => {
+                try {
+                    await request('/conversations/invitations/' + inv.id, { method: 'DELETE' });
+                    toast('Invitation cancelled');
+                    openGroupManage();
+                } catch (err) {
+                    toast(err.message);
+                }
+            });
+            row.appendChild(cancel);
+            list.appendChild(row);
+        });
+    }
+
+    function openAddMemberModal() {
+        const conv = state.currentConversation;
+        const { body, actions } = openModal('Add members');
+        const input = el('input');
+        input.placeholder = 'Search users by name...';
+        const results = el('div', 'card-list');
+        const selected = new Set();
+        body.appendChild(input);
         body.appendChild(results);
+
+        async function searchUsersForInvite(query) {
+            while (results.firstChild) results.removeChild(results.firstChild);
+            if (!query.trim()) {
+                state.friends.forEach((friend) => renderUserOption(friend));
+                return;
+            }
+            try {
+                const page = await request('/users/search?query=' + encodeURIComponent(query));
+                const content = page.content || page || [];
+                content.forEach((person) => {
+                    if (state.user && person.id === state.user.id) return;
+                    renderUserOption(person);
+                });
+            } catch (err) {
+                toast(err.message);
+            }
+        }
+
+        function renderUserOption(person) {
+            const row = el('label', 'card-row');
+            const box = document.createElement('input');
+            box.type = 'checkbox';
+            box.checked = selected.has(person.id);
+            box.addEventListener('change', () => {
+                if (box.checked) selected.add(person.id);
+                else selected.delete(person.id);
+            });
+            const avatar = el('div', 'avatar');
+            setAvatar(avatar, person.displayName, person.avatarUrl);
+            const mid = el('div');
+            mid.appendChild(el('strong', '', person.displayName));
+            mid.appendChild(el('span', 'muted', '@' + person.username));
+            row.appendChild(box);
+            row.appendChild(avatar);
+            row.appendChild(mid);
+            results.appendChild(row);
+        }
+
+        input.addEventListener('input', () => searchUsersForInvite(input.value));
+        searchUsersForInvite('');
+
+        const invite = el('button', 'btn btn-primary', 'Send Invitations');
+        invite.type = 'button';
+        invite.addEventListener('click', async () => {
+            if (selected.size === 0) {
+                toast('Select at least one user');
+                return;
+            }
+            try {
+                await request('/conversations/' + conv.id + '/invitations', {
+                    method: 'POST',
+                    body: JSON.stringify({ userIds: Array.from(selected) })
+                });
+                closeModal();
+                toast('Invitations sent');
+                openGroupManage();
+            } catch (err) {
+                toast(err.message);
+            }
+        });
+        actions.appendChild(invite);
         const cancel = el('button', 'btn btn-ghost', 'Cancel');
         cancel.type = 'button';
         cancel.addEventListener('click', closeModal);
@@ -813,6 +1080,10 @@
                 $('incoming-pane').hidden = tab.dataset.reqtab !== 'incoming';
                 $('outgoing-pane').hidden = tab.dataset.reqtab !== 'outgoing';
                 $('friends-pane').hidden = tab.dataset.reqtab !== 'friends';
+                $('group-invites-pane').hidden = tab.dataset.reqtab !== 'group-invites';
+                if (tab.dataset.reqtab === 'group-invites') {
+                    renderGroupInvitationsList();
+                }
             });
         });
         $('conv-search').addEventListener('input', renderConversations);
@@ -821,6 +1092,13 @@
             if (event.key === 'Enter') {
                 event.preventDefault();
                 searchUsers();
+            }
+        });
+        $('group-discover-search-btn').addEventListener('click', loadDiscoverGroups);
+        $('group-discover-search').addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                loadDiscoverGroups();
             }
         });
         $('modal-close').addEventListener('click', closeModal);
