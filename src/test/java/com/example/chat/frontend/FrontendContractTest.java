@@ -36,6 +36,9 @@ class FrontendContractTest {
     private static final Pattern DEST_ENTRY =
             Pattern.compile("([A-Z_]+)\\s*:\\s*'(/[^']*)'");
 
+    /** How far back a handler may open its confirmation and still count as guarding the call. */
+    private static final int CONFIRM_WINDOW = 700;
+
     @Test
     @DisplayName("the browser publishes to exactly the destinations the server serves")
     void browserDestinationsMatchTheServer() throws IOException {
@@ -75,6 +78,58 @@ class FrontendContractTest {
         assertThat(js).as("conversation list must show a loading state before the first fetch lands")
                 .contains("loading-row")
                 .contains("aria-busy");
+    }
+
+    @Test
+    @DisplayName("the shared modal announces itself as a dialog and is dismissible by keyboard")
+    void modalIsAnAccessibleDialog() throws IOException {
+        String html = Files.readString(Path.of("src/main/resources/static/index.html"), StandardCharsets.UTF_8);
+        assertThat(html)
+                .as("without dialog semantics the question read out is whatever the page title happens to be")
+                .contains("role=\"dialog\"")
+                .contains("aria-modal=\"true\"")
+                .contains("aria-labelledby=\"modal-title\"")
+                .contains("aria-describedby=\"modal-body\"");
+
+        String js = Files.readString(CHAT_JS, StandardCharsets.UTF_8);
+        assertThat(js).as("Escape cancels and Tab cannot wander into the page behind the card")
+                .contains("trapModalKeys")
+                .contains("event.key === 'Escape'");
+    }
+
+    @Test
+    @DisplayName("destructive client actions ask for confirmation before they send the request")
+    void destructiveActionsConfirmFirst() throws IOException {
+        String js = Files.readString(CHAT_JS, StandardCharsets.UTF_8);
+        assertThat(js)
+                .as("the native dialog cannot be styled or read the way an in-app one can")
+                .doesNotContain("window.confirm");
+        assertThat(js)
+                .as("native confirm() must not come back")
+                .doesNotContainPattern("(?<![\\w$.])confirm\\s*\\(");
+
+        destructiveCalls().forEach((call, label) -> {
+            int at = js.indexOf(call);
+            assertThat(at).as("the client still performs %s", label).isNotNegative();
+            int from = Math.max(0, at - CONFIRM_WINDOW);
+            assertThat(js.substring(from, at))
+                    .as("%s has to be behind a confirmation dialog", label)
+                    .contains("await confirmAction(");
+        });
+    }
+
+    /** Destructive requests the user can fire off from the page, and what each one costs. */
+    private static Map<String, String> destructiveCalls() {
+        Map<String, String> calls = new LinkedHashMap<>();
+        calls.put("await request('/messages/' + msg.id, { method: 'DELETE' });", "deleting a message");
+        calls.put("await request('/friends/' + friend.id, { method: 'DELETE' });", "removing a friend");
+        calls.put("await request('/conversations/' + conv.id + '/members/' + member.userId, { method: 'DELETE' });", "removing a member");
+        calls.put("await request('/conversations/groups/' + conv.id + '/blocks', {", "blocking a member");
+        calls.put("await request('/conversations/groups/' + groupId + '/invite-links/' + link.id, { method: 'DELETE' });", "revoking an invite link");
+        calls.put("await request('/conversations/' + conv.id + '/leave', { method: 'POST' });", "leaving a group");
+        calls.put("await request('/conversations/' + conv.id, { method: 'DELETE' });", "deleting a group");
+        calls.put("await request('/auth/logout', { method: 'POST', body: '{}' });", "logging out");
+        return calls;
     }
 
     /** Pulls the {@code DEST} freeze block out of the script. */

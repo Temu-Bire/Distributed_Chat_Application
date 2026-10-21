@@ -318,18 +318,37 @@
     }
 
     function renderFriends() {
-        fillPeopleList($('friends-list'), state.friends, (friend) => {
+        const actions = (friend) => {
+            const wrap = el('div', 'row-gap');
+            wrap.style.marginTop = '0';
             const message = el('button', 'pill pill-ok', 'Message');
             message.type = 'button';
             message.addEventListener('click', () => startDirect(friend.id));
-            return message;
+            wrap.appendChild(message);
+            const remove = el('button', 'pill pill-no', 'Remove');
+            remove.type = 'button';
+            remove.addEventListener('click', () => removeFriend(friend));
+            wrap.appendChild(remove);
+            return wrap;
+        };
+        fillPeopleList($('friends-list'), state.friends, actions);
+        fillPeopleList($('requests-friends-list'), state.friends, actions);
+    }
+
+    async function removeFriend(friend) {
+        const ok = await confirmAction({
+            title: 'Remove ' + (friend.displayName || 'this friend') + '?',
+            message: 'You both leave the other list of friends. Shared conversations stay where they are.',
+            confirm: 'Remove'
         });
-        fillPeopleList($('requests-friends-list'), state.friends, (friend) => {
-            const message = el('button', 'pill pill-ok', 'Message');
-            message.type = 'button';
-            message.addEventListener('click', () => startDirect(friend.id));
-            return message;
-        });
+        if (!ok) return;
+        try {
+            await request('/friends/' + friend.id, { method: 'DELETE' });
+            toast('Friend removed');
+            await loadFriends();
+        } catch (err) {
+            toast(err.message);
+        }
     }
 
     function fillPeopleList(list, people, actionFactory) {
@@ -814,6 +833,12 @@
     }
 
     async function removeOwnMessage(msg) {
+        const ok = await confirmAction({
+            title: 'Delete this message?',
+            message: 'It disappears for everyone in this conversation and cannot be restored.',
+            confirm: 'Delete'
+        });
+        if (!ok) return;
         try {
             await request('/messages/' + msg.id, { method: 'DELETE' });
             const conversationId = msg.conversationId || (state.currentConversation && state.currentConversation.id);
@@ -1101,15 +1126,29 @@
         await Promise.all([loadConversations(), loadFriends(), loadSettings()]);
     }
 
+    // Set while a confirmation dialog is waiting for an answer, and the element
+    // that had focus before the modal opened.
+    let pendingConfirm = null;
+    let modalReturnFocus = null;
+
     function closeModal() {
+        const settle = pendingConfirm;
+        pendingConfirm = null;
         $('modal').hidden = true;
         const body = $('modal-body');
         const actions = $('modal-actions');
         while (body.firstChild) body.removeChild(body.firstChild);
         while (actions.firstChild) actions.removeChild(actions.firstChild);
+        const target = modalReturnFocus;
+        modalReturnFocus = null;
+        if (target && document.contains(target)) target.focus();
+        // A dialog dismissed by Escape, the backdrop or the × always counts as
+        // "no": a confirmation must never resolve on its own dismissal.
+        if (settle) settle(false);
     }
 
     function openModal(title) {
+        modalReturnFocus = document.activeElement;
         $('modal-title').textContent = title;
         const body = $('modal-body');
         const actions = $('modal-actions');
@@ -1117,6 +1156,69 @@
         while (actions.firstChild) actions.removeChild(actions.firstChild);
         $('modal').hidden = false;
         return { body, actions };
+    }
+
+    /**
+     * The in-app replacement for the browser's built-in confirmation dialog. The
+     * native one cannot be styled, reads out the page title instead of the
+     * question, and takes focus away from the document, so every destructive
+     * action goes through here instead and resolves true only when the user
+     * presses the confirm button.
+     */
+    function confirmAction(options) {
+        const opts = Object.assign({
+            title: 'Are you sure?',
+            message: '',
+            confirm: 'Confirm',
+            cancel: 'Cancel',
+            danger: true
+        }, options);
+        if (pendingConfirm) return Promise.resolve(false);
+
+        const modal = openModal(opts.title);
+        modal.body.appendChild(el('p', 'confirm-text', opts.message));
+
+        const cancel = el('button', 'btn btn-ghost', opts.cancel);
+        cancel.type = 'button';
+        cancel.addEventListener('click', closeModal);
+
+        const proceed = el('button', 'btn ' + (opts.danger ? 'btn-danger' : 'btn-primary'), opts.confirm);
+        proceed.type = 'button';
+        proceed.addEventListener('click', () => {
+            const settle = pendingConfirm;
+            pendingConfirm = null;
+            closeModal();
+            if (settle) settle(true);
+        });
+
+        modal.actions.appendChild(cancel);
+        modal.actions.appendChild(proceed);
+        proceed.focus();
+        return new Promise((resolve) => { pendingConfirm = resolve; });
+    }
+
+    function trapModalKeys(event) {
+        const modal = $('modal');
+        if (modal.hidden) return;
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            closeModal();
+            return;
+        }
+        if (event.key !== 'Tab') return;
+        const focusables = Array.prototype.filter.call(
+            modal.querySelectorAll('button:not([disabled]), input:not([type="hidden"]), textarea, select'),
+            (node) => node.offsetParent !== null);
+        if (!focusables.length) return;
+        // Own every Tab rather than only the two ends: the page behind the card
+        // is still focusable, so letting the browser decide would leak out.
+        event.preventDefault();
+        const current = focusables.indexOf(document.activeElement);
+        const back = event.shiftKey;
+        const next = current < 0
+            ? (back ? focusables.length - 1 : 0)
+            : (current + (back ? -1 : 1) + focusables.length) % focusables.length;
+        focusables[next].focus();
     }
 
     async function fetchDirectory(query) {
@@ -1320,6 +1422,12 @@
                         const remove = el('button', 'pill pill-no', 'Remove');
                         remove.type = 'button';
                         remove.addEventListener('click', async () => {
+                            const ok = await confirmAction({
+                                title: 'Remove ' + (member.displayName || 'this member') + '?',
+                                message: 'They lose access to this group and its history immediately.',
+                                confirm: 'Remove'
+                            });
+                            if (!ok) return;
                             try {
                                 await request('/conversations/' + conv.id + '/members/' + member.userId, { method: 'DELETE' });
                                 toast('Member removed');
@@ -1334,6 +1442,12 @@
                         const block = el('button', 'pill pill-no', 'Block');
                         block.type = 'button';
                         block.addEventListener('click', async () => {
+                            const ok = await confirmAction({
+                                title: 'Block ' + (member.displayName || 'this member') + '?',
+                                message: 'They are removed from the group and cannot join, request to join or use an invite link.',
+                                confirm: 'Block'
+                            });
+                            if (!ok) return;
                             try {
                                 await request('/conversations/groups/' + conv.id + '/blocks', {
                                     method: 'POST',
@@ -1353,6 +1467,7 @@
             });
 
             $('add-member-btn').hidden = !isAdmin;
+            $('group-delete-btn').hidden = conv.myRole !== 'OWNER';
             document.querySelectorAll('.group-menu__item[data-gtab="requests"], .group-menu__item[data-gtab="invitations"], .group-menu__item[data-gtab="blocked"], .group-menu__item[data-gtab="links"]')
                 .forEach((item) => { item.hidden = !isAdmin; });
             if (!isAdmin) switchGroupTab('info');
@@ -1434,6 +1549,12 @@
                 const revoke = el('button', 'pill pill-no', 'Revoke');
                 revoke.type = 'button';
                 revoke.addEventListener('click', async () => {
+                    const ok = await confirmAction({
+                        title: 'Revoke this invite link?',
+                        message: 'Anyone who has not used it yet loses access. Members already inside stay inside.',
+                        confirm: 'Revoke'
+                    });
+                    if (!ok) return;
                     try {
                         await request('/conversations/groups/' + groupId + '/invite-links/' + link.id, { method: 'DELETE' });
                         toast('Invite link revoked');
@@ -2312,6 +2433,7 @@
         });
         $('modal-close').addEventListener('click', closeModal);
         $('modal-backdrop').addEventListener('click', closeModal);
+        document.addEventListener('keydown', trapModalKeys);
         $('add-member-btn').addEventListener('click', openAddMemberModal);
         $('group-leave-btn').addEventListener('click', async () => {
             const conv = state.currentConversation;
@@ -2319,9 +2441,37 @@
                 toast('Open a group chat first');
                 return;
             }
+            const ok = await confirmAction({
+                title: 'Leave this group?',
+                message: 'You lose access to the conversation straight away and can only return by request or invite link.',
+                confirm: 'Leave group'
+            });
+            if (!ok) return;
             try {
                 await request('/conversations/' + conv.id + '/leave', { method: 'POST' });
                 toast('Left the group');
+                state.currentConversation = null;
+                await loadConversations();
+                openView('chats');
+            } catch (err) {
+                toast(err.message);
+            }
+        });
+        $('group-delete-btn').addEventListener('click', async () => {
+            const conv = state.currentConversation;
+            if (!conv || !isGroup(conv)) {
+                toast('Open a group chat first');
+                return;
+            }
+            const ok = await confirmAction({
+                title: 'Delete this group?',
+                message: 'The group, every message in it and every invite link for it are destroyed for all members.',
+                confirm: 'Delete group'
+            });
+            if (!ok) return;
+            try {
+                await request('/conversations/' + conv.id, { method: 'DELETE' });
+                toast('Group deleted');
                 state.currentConversation = null;
                 await loadConversations();
                 openView('chats');
@@ -2628,6 +2778,12 @@
             }
         });
         $('avatar-remove-btn').addEventListener('click', async () => {
+            const ok = await confirmAction({
+                title: 'Remove your photo?',
+                message: 'Your profile falls back to the initials placeholder.',
+                confirm: 'Remove'
+            });
+            if (!ok) return;
             state.user = await request('/users/profile', {
                 method: 'PUT',
                 body: JSON.stringify({
@@ -2639,6 +2795,12 @@
             updateProfileChrome();
         });
         $('logout-btn').addEventListener('click', async () => {
+            const ok = await confirmAction({
+                title: 'Log out of ChatSphere?',
+                message: 'Live updates stop and you will need to sign in again to read your messages.',
+                confirm: 'Log out'
+            });
+            if (!ok) return;
             try { await request('/auth/logout', { method: 'POST', body: '{}' }); } catch (e) {}
             if (state.stomp) state.stomp.disconnect();
             cancelReconnect();

@@ -84,6 +84,8 @@ ul { list-style: none; }
 .btn-sm { min-height: 36px; width: auto; font-size: 13px; }
 .btn-outline { border: 1px solid var(--line); background: var(--surface); }
 .btn-ghost { color: var(--sub); }
+.btn-danger { background: var(--danger); color: #fff; }
+.btn-danger:hover { background: #dc2626; }
 .link { color: var(--primary); font-weight: 600; }
 .alert { margin-top: 8px; padding: 10px 12px; border-radius: 10px; background: #fee2e2; color: #b91c1c; }
 .muted { color: var(--sub); }
@@ -319,6 +321,7 @@ ul { list-style: none; }
     border-radius: 20px; padding: 20px; box-shadow: var(--shadow); display: grid; gap: 14px;
     max-height: calc(100% - 48px); overflow: auto;
 }
+.confirm-text { color: var(--sub); line-height: 1.5; }
 
 .toast-container { position: fixed; top: 16px; right: 16px; z-index: 50; display: grid; gap: 8px; }
 .toast { background: var(--navy); color: #fff; padding: 10px 14px; border-radius: 12px; }
