@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChatSphere — Connect. Chat. Belong.</title>
+    <meta name="description" content="ChatSphere is a real-time chat application: private conversations, groups with moderation, reactions and replies — built on WebSockets with security baked in.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/landing.css">
+</head>
+<body>
+
+<header class="nav">
+    <a class="nav__brand" href="#top" aria-label="ChatSphere home">
+        <span class="logo-mark" aria-hidden="true"></span>
+        <span>ChatSphere</span>
+    </a>
+    <nav class="nav__links" aria-label="Page sections">
+        <a href="#features">Features</a>
+        <a href="#realtime">Real-time</a>
+        <a href="#security">Security</a>
+    </nav>
+    <div class="nav__actions">
+        <a class="btn btn--ghost" href="/app">Log in</a>
+        <a class="btn btn--primary" href="/app#signup">Get started</a>
+    </div>
+</header>
+
+<main id="top">
+    <section class="hero">
+        <div class="hero__copy">
+            <p class="eyebrow">Real-time messaging for people and teams</p>
+            <h1>Connect. Chat.<br><span class="accent">Belong.</span></h1>
+            <p class="lead">
+                Private conversations with friends, group chats your community trusts,
+                and messages that arrive the instant they are sent — no refresh, no lag,
+                no surprises.
+            </p>
+            <div class="hero__cta">
+                <a class="btn btn--primary btn--lg" href="/app#signup">Create a free account</a>
+                <a class="btn btn--ghost btn--lg" href="/app">I already have one</a>
+            </div>
+            <ul class="hero__proof">
+                <li>Free while it runs on your machine</li>
+                <li>No ads, no tracking</li>
+            </ul>
+        </div>
+
+        <div class="hero__art" aria-hidden="true">
+            <div class="mock">
+                <div class="mock__head">
+                    <span class="mock__dots"><i></i><i></i><i></i></span>
+                    <span class="mock__title">Design crew</span>
+                    <span class="mock__live"><i></i>live</span>
+                </div>
+                <div class="mock__body">
+                    <div class="bubble bubble--in">Did the new landing page ship? 🎉</div>
+                    <div class="bubble bubble--out">Pushed a minute ago — reactions work already</div>
+                    <div class="bubble bubble--in bubble--reply">
+                        <span class="reply-stub">↳ “reactions work already”</span>
+                        Then this one is the first 👍
+                    </div>
+                    <div class="bubble bubble--out">
+                        And nobody outside the group can read any of it
+                    </div>
+                    <div class="mock__reactions">
+                        <span class="chip">👍 2</span>
+                        <span class="chip">🔥 1</span>
+                    </div>
+                </div>
+                <div class="mock__typing">Mia is typing…</div>
+            </div>
+        </div>
+    </section>
+
+    <section class="stats" aria-label="What you get">
+        <div class="stat"><strong>Instant</strong><span>delivery over WebSocket</span></div>
+        <div class="stat"><strong>Members</strong><span>who cannot read what is not theirs</span></div>
+        <div class="stat"><strong>Retries</strong><span>that never duplicate a message</span></div>
+        <div class="stat"><strong>History</strong><span>persisted before anything is confirmed</span></div>
+    </section>
+
+    <section id="features" class="section">
+        <h2>Everything a good chat needs</h2>
+        <p class="section__sub">Built for the way groups actually talk.</p>
+        <div class="grid">
+            <article class="card">
+                <h3>Private conversations</h3>
+                <p>One-to-one chats with anyone in your network. Search users, send a friend request with a note, and open as many direct threads as you need.</p>
+            </article>
+            <article class="card">
+                <h3>Groups with real moderation</h3>
+                <p>Owners and moderators manage members, roles and settings. Public groups are open; private groups run on join requests and invitations. Blocked users are enforced on every entry path.</p>
+            </article>
+            <article class="card">
+                <h3>Replies, reactions, edits</h3>
+                <p>Answer a specific message, react with emoji, edit or delete your own words. Moderators can clear spam — everything updates live for every reader.</p>
+            </article>
+            <article class="card">
+                <h3>Presence and people</h3>
+                <p>See who is online, discover groups by name, and track the state of your friend and join requests without leaving the app.</p>
+            </article>
+            <article class="card">
+                <h3>Reliable by design</h3>
+                <p>Sends are idempotent: if the network hiccups and your client retries, the message lands exactly once. History is saved before it is ever announced.</p>
+            </article>
+            <article class="card">
+                <h3>Yours to run</h3>
+                <p>A single Spring Boot jar with an embedded database — start it locally, or scale the stateless app nodes behind shared Postgres and Redis when your community grows.</p>
+            </article>
+        </div>
+    </section>
+
+    <section id="realtime" class="section section--split">
+        <div>
+            <h2>Real-time where it matters</h2>
+            <p>
+                ChatSphere keeps an open WebSocket per session and speaks STOMP over it, so joins,
+                messages, edits and reactions stream to every member the moment they happen.
+                Heartbeats detect dead connections, the client reconnects automatically, and each
+                conversation lives on its own subscription — delivered only to members.
+            </p>
+            <ul class="ticks">
+                <li>Bounded thread pools absorb bursts instead of unbounded spawning</li>
+                <li>Transactions commit before any fan-out is published</li>
+                <li>Optional Redis relay propagates events across instances</li>
+            </ul>
+        </div>
+        <div class="pulse" aria-hidden="true">
+            <div class="pulse__ring"></div>
+            <div class="pulse__core">
+                <svg viewBox="0 0 24 24" width="42" height="42" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+            </div>
+        </div>
+    </section>
+
+    <section id="security" class="section section--dark">
+        <h2>Security is not an add-on here</h2>
+        <p class="section__sub section__sub--dark">The parts you never see, checked by tests you can run.</p>
+        <div class="grid grid--dark">
+            <article class="card card--dark">
+                <h3>Passwords, hashed</h3>
+                <p>BCrypt hashes only — the plain password never touches storage, logs, or your session.</p>
+            </article>
+            <article class="card card--dark">
+                <h3>Authorization, enforced server-side</h3>
+                <p>Every REST call and every WebSocket subscription is checked against real membership. A message you are not party to is never delivered to you — proved by automated tests.</p>
+            </article>
+            <article class="card card--dark">
+                <h3>Sessions, rotated and locked down</h3>
+                <p>Session ids change at login and stop working behind you. Cookies are HttpOnly with SameSite=Lax, and pages ship a strict Content-Security-Policy.</p>
+            </article>
+            <article class="card card--dark">
+                <h3>Abuse, budgeted</h3>
+                <p>Login, registration, friend requests and message sends run under per-minute rate limits — brute-force attempts get 429s, not accounts.</p>
+            </article>
+        </div>
+    </section>
+
+    <section class="cta">
+        <h2>Your conversations are waiting.</h2>
+        <p>Create an account in seconds, or sign in to pick up where you left off.</p>
+        <div class="cta__actions">
+            <a class="btn btn--primary btn--lg" href="/app#signup">Get started</a>
+            <a class="btn btn--outline btn--lg" href="/app">Log in</a>
+        </div>
+    </section>
+</main>
+
+<footer class="footer">
+    <div class="footer__inner">
+        <span class="footer__brand">ChatSphere</span>
+        <nav class="footer__links" aria-label="Footer">
+            <a href="#features">Features</a>
+            <a href="#security">Security</a>
+            <a href="/app">Open the app</a>
+        </nav>
+    </div>
+</footer>
+
+</body>
+</html>

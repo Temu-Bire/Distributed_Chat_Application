@@ -1737,7 +1737,9 @@
     async function bootAuthenticated() {
         const status = await request('/auth/status');
         if (!status.authenticated) {
-            showAuth('login');
+            // The landing page's "Get Started" deep-links #signup here;
+            // everyone else lands on the login screen.
+            showAuth(location.hash === '#signup' ? 'register' : 'login');
             return;
         }
         state.user = status.user;
