@@ -188,6 +188,10 @@ public class AuthService {
         if (httpRequest != null) {
             HttpSession session = httpRequest.getSession(true);
             session.setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY, context);
+            // Authentication must never inherit a session id that existed
+            // beforehand: an attacker who planted or observed that id would
+            // otherwise ride the victim's newly privileged session.
+            httpRequest.changeSessionId();
         }
     }
 }
