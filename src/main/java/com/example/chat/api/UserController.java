@@ -2,7 +2,9 @@ package com.example.chat.api;
 
 import com.example.chat.application.AuthService;
 import com.example.chat.application.FriendService;
+import com.example.chat.application.ProfileQueryService;
 import com.example.chat.dto.auth.ChangePasswordRequest;
+import com.example.chat.dto.auth.PublicProfileResponse;
 import com.example.chat.dto.auth.UpdateProfileRequest;
 import com.example.chat.dto.auth.UserProfileResponse;
 import com.example.chat.dto.auth.UserSearchResult;
@@ -22,15 +24,31 @@ public class UserController {
 
     private final AuthService authService;
     private final FriendService friendService;
+    private final ProfileQueryService profileQueryService;
 
-    public UserController(AuthService authService, FriendService friendService) {
+    public UserController(AuthService authService, FriendService friendService,
+                          ProfileQueryService profileQueryService) {
         this.authService = authService;
         this.friendService = friendService;
+        this.profileQueryService = profileQueryService;
     }
 
     @GetMapping("/profile")
     public ResponseEntity<UserProfileResponse> getProfile(Principal principal) {
         return ResponseEntity.ok(authService.getCurrentUser(principal));
+    }
+
+    /**
+     * The profile card of another account. Literal paths above and below this
+     * template win over it, so {@code /profile} and {@code /search} keep their
+     * own handlers; the id is matched exactly and never falls back to a name.
+     */
+    @GetMapping("/{id}")
+    public ResponseEntity<PublicProfileResponse> getPublicProfile(
+            Principal principal,
+            @PathVariable("id") UUID targetUserId) {
+        UserProfileResponse viewer = authService.getCurrentUser(principal);
+        return ResponseEntity.ok(profileQueryService.findProfile(viewer.id(), targetUserId));
     }
 
     @PutMapping("/profile")
