@@ -18,14 +18,25 @@ A single Spring Boot process that:
 - exposes a REST API (`/api/**`) for auth, users, friends, groups, conversations,
   messages, settings and file uploads,
 - accepts STOMP-over-WebSocket connections at `/ws`, authorising every
-  conversation subscription by membership,
-- persists users, friendships, conversations, messages, reactions and group
-  state in an embedded H2 file database (PostgreSQL mode) with Flyway as the sole
-  schema owner (`ddl-auto: validate`),
+  conversation subscription by membership and every notification subscription
+  by ownership,
+- persists users, friendships, conversations, members and roles, messages with
+  replies/reactions/pins/attachments/read positions, group join requests,
+  invitations, invite links and per-user settings in an embedded H2 file database
+  (PostgreSQL mode) with Flyway as the sole schema owner (`ddl-auto: validate`),
+- fans out conversation events (`NEW_MESSAGE`, `MESSAGE_EDITED`,
+  `MESSAGE_DELETED`, `MESSAGE_REACTED`, `MESSAGE_PINNED`, `READ_UPDATE`,
+  `TYPING`) after commit, and live notifications to a private per-user topic,
 - applies fixed-window rate limits to login, registration, friend requests and
   message sends (429 + `Retry-After`),
+- validates uploads by magic bytes, size and generated storage name rather than
+  by the filename or content type the client claimed,
+- keeps the browser usable through a dropped socket: STOMP 1.1 heartbeats, a
+  silence watchdog, capped exponential reconnect, REST catch-up for everything
+  missed, and a REST fallback for composer sends,
 - holds live presence in memory by default, with a Redis-backed distributed
-  mode (`chat.distributed.enabled`) for multi-instance deployments.
+  mode (`chat.distributed.enabled`) that moves presence to a shared TTL store and
+  relays every topic frame across instances over Redis Pub/Sub.
 
 ---
 
@@ -51,6 +62,9 @@ flowchart TB
             CS["application/ChatService<br/>join / leave (presence)"]
             PS["application/PresenceService<br/>who is online"]
             MR["application/MessageRouter<br/>the only owner of destination names"]
+            MSG["application/PersistentMessageService<br/>send / edit / delete / react / pin /<br/>search / forward / read receipts"]
+            TY["application/TypingService<br/>throttled ephemeral hints"]
+            NT["application/NotificationService<br/>preference-gated per-user events"]
             PORT["application/PresenceStore<br/>port (interface)"]
         end
 
@@ -61,6 +75,7 @@ flowchart TB
 
         subgraph Infra["Infrastructure and configuration"]
             STORE["infrastructure/InMemoryPresenceStore<br/>ConcurrentHashMap × 2"]
+            RELAY["infrastructure/redis/DistributedMessageRelay<br/>Redis Pub/Sub fan-out between nodes"]
             CFG["config/WebSocketConfig<br/>broker prefixes, bounded executors, limits"]
             HAND["config/AnonymousHandshakeHandler<br/>per-connection Principal"]
         end
@@ -71,17 +86,27 @@ flowchart TB
     UI -->|WebSocket /ws| WS
     UI -->|HTTPS-style REST /api/**| REST
     SEC["security/ SecurityConfig + RateLimitFilter<br/>session auth, CSP, 429 budgets"] --> REST
+    GUARD["security/StompSubscriptionGuard<br/>membership + notification ownership"] --> WS
     WS --> CS
+    WS --> MSG
+    WS --> TY
     LEAVE --> CS
     CS --> PS
     CS --> MR
     PS --> PORT
     STORE -. "implements" .-> PORT
+    MSG --> BROKER
+    TY --> BROKER
+    NT --> BROKER
     MR --> BROKER
+    MSG -. "when distributed" .-> RELAY
+    NT -. "when distributed" .-> RELAY
+    MR -. "when distributed" .-> RELAY
     CFG --> BROKER
     WS --> HAND
     ADVICE --> MR
     CS --> D
+    MSG --> D
     WS --> DTO
 ```
 
@@ -108,13 +133,25 @@ nothing about HTTP or WebSocket headers.
 1. **Session management is separate from message routing.**
    `PresenceStore`/`PresenceService` answer "who exists?"; `MessageRouter`
    answers "where does this go?". Neither has to understand the other's job.
-2. **`MessageRouter` is the only class that constructs destination strings.**
-   It also owns the `/app` and `/user` prefixes, which
-   `WebSocketConfig` passes to the broker. This makes one class the source of
-   truth for the wire contract, and `FrontendContractTest` checks the browser's
-   copy against it.
-3. **`PresenceStore` is a port.** `InMemoryPresenceStore` is its only
-   implementation. Swapping in Redis later changes one class, not the services.
+2. **`MessageRouter` owns the wire vocabulary, not every publish.**
+   It holds the `/app` and `/user` prefixes that `WebSocketConfig` passes to the
+   broker, the destination constants, and the two builders
+   (`conversationTopic(id)`, `notificationTopic(userId)`) — so no destination
+   string is assembled anywhere else, and `FrontendContractTest` can check the
+   browser's copy against one source of truth. It also publishes presence (the
+   one frame with no business service behind it) and per-connection errors.
+   Conversation and notification frames are published by their own services,
+   because those publishes are the after-commit half of a transaction those
+   services own; `MessageRouter` could not both hold the routing table and stay
+   out of their transaction boundaries.
+3. **`PresenceStore` is a port with two implementations.**
+   `InMemoryPresenceStore` is the default; `RedisPresenceStore` is selected by
+   `chat.distributed.enabled=true` through `@ConditionalOnProperty`, so the
+   services never learn which one they got. The same trick keeps
+   `DistributedMessageRelay` optional: services ask an
+   `ObjectProvider<DistributedMessageRelay>` at publish time and skip the relay
+   when the bean is absent, which is why single-node and cluster code paths are
+   literally the same code.
 
 ---
 
@@ -136,21 +173,44 @@ nothing about HTTP or WebSocket headers.
 | Destination | Payload | Effect |
 |---|---|---|
 | `/app/chat.join` | `{"username":"alice"}` | Registers this connection under a display name |
-| `/app/conversations/{id}/send` | `{"content":"hello"}` | Persists a message and fans it out to the conversation topic |
+| `/app/conversations/{id}/send` | `{"content":"hello","replyToId":null,"clientMessageId":"…"}` | Persists a message and fans it out to the conversation topic |
+| `/app/conversations/{id}/typing` | `{"typing":true}` | Broadcasts an ephemeral typing hint, throttled to one frame per member per 2 s |
 
 ### Server → client (broadcast or directed)
 
 | Destination | Payload | When |
 |---|---|---|
 | `/topic/users` | `UserPresenceResponse` | Any join, leave, or presence change |
-| `/topic/conversations/{id}` | conversation event (`NEW_MESSAGE`, `MESSAGE_EDITED`, `MESSAGE_DELETED`) | A persisted message changes in a conversation you subscribe to |
+| `/topic/conversations/{id}` | conversation event (`NEW_MESSAGE`, `MESSAGE_EDITED`, `MESSAGE_DELETED`, `MESSAGE_REACTED`, `MESSAGE_PINNED`, `READ_UPDATE`, `TYPING`) | A persisted message changes in a conversation you subscribe to |
+| `/topic/notifications/{userId}` | `NotificationDto` | Something that concerns that one user happened: message, mention, reply, friend request/acceptance, group invite, join request/acceptance — and only if their stored preference for that category allows it |
 | `/user/queue/errors` | `ErrorResponse` | A failure caused by *this* connection |
+
+Notifications go to a **topic** rather than `/user/queue/…` because
+`DistributedMessageRelay` only carries topic destinations between instances;
+`StompSubscriptionGuard` is therefore what keeps them private — it refuses the
+subscription for any session whose user is not that id. The unguessable UUID in
+the path is a convenience, not the authorisation.
+
+### Conversation event envelope
+
+Every event on `/topic/conversations/{id}` is one shape:
+
+```json
+{ "event": "READ_UPDATE", "conversationId": "…", "data": { }, "timestamp": "…" }
+```
+
+`data` is the full `PersistentMessageResponse` for message-carrying events and a
+small map for the two that are not about one row (`READ_UPDATE` carries
+`{userId, readAt}`, `TYPING` carries `{userId, username, typing}`). Clients
+never have to guess which event they received from the payload's shape, and no
+event is published before its transaction commits.
 
 ### Message JSON schema
 
 Persisted conversation messages travel as `PersistentMessageResponse` objects
-(id, conversation id, sender id/username, content, timestamps, edit/delete
-flags) inside `NEW_MESSAGE` / `MESSAGE_EDITED` / `MESSAGE_DELETED` events on
+(id, conversation id, sender id/username, content, timestamps, edit/delete/
+pin/forward flags, `readByCount`, reply preview, attachment, reaction
+aggregates) inside the message-carrying events on
 `/topic/conversations/{id}`. `sender`, ids, and timestamps are **always
 assigned by the server**.
 
@@ -170,17 +230,29 @@ client cannot be left with a stale list after a lost frame.
 
 ### Error codes
 
-| Code | Meaning |
-|---|---|
-| `INVALID_USERNAME` | Blank, too long, or contains control characters |
-| `USERNAME_TAKEN` | Another live connection already holds the name |
-| `INVALID_MESSAGE` | Blank or over 2000 characters |
-| `INVALID_COMMAND` | The frame is missing something the server needs |
-| `INTERNAL_ERROR` | A server bug; details go to the log only |
+One `ErrorResponse{code,message}` shape serves both transports; REST adds the
+HTTP status in `GlobalExceptionHandler.statusFor`.
+
+| Code | HTTP | Meaning |
+|---|---|---|
+| `INVALID_USERNAME` | 400 | Blank, too long, or contains control characters |
+| `USERNAME_TAKEN` | 409 | Another live connection already holds the name |
+| `INVALID_MESSAGE` | 400 | Blank or over 2000 characters |
+| `INVALID_REACTION` | 400 | Not a recognised emoji, or too long |
+| `INVALID_UPLOAD` | 400 | Empty, oversized, or the bytes are not an allowed type |
+| `INVALID_COMMAND` | 400 | The request is well-formed but the operation is not allowed here |
+| `UNAUTHORIZED` / `BAD_CREDENTIALS` | 401 | No session, or the password did not match |
+| `FORBIDDEN` / `NOT_MEMBER` / `USER_BLOCKED` | 403 | Authenticated, but not permitted for this conversation or group |
+| `USER_NOT_FOUND` / `CONVERSATION_NOT_FOUND` / `MESSAGE_NOT_FOUND` / `REQUEST_NOT_FOUND` | 404 | The target does not exist (or was removed) |
+| `DUPLICATE_USERNAME` / `DUPLICATE_EMAIL` / `ALREADY_FRIENDS` / `CANNOT_FRIEND_SELF` / `REQUEST_ALREADY_EXISTS` | 409 | The state you asked to create already exists |
+| `RATE_LIMITED` | 429 | Budget exhausted; carries `Retry-After` |
+| `INTERNAL_ERROR` | 500 | A server bug; details go to the log only |
 
 The code identifies the *concept* that was wrong, whichever layer noticed it:
 the validation handler maps the offending field onto the right code, so a bad
-username never comes back disguised as a bad message.
+username never comes back disguised as a bad message. Not-found and not-a-member
+deliberately share the refusal for resources the caller may not see, so the API
+does not confirm the existence of a conversation to an outsider.
 
 ---
 
@@ -218,13 +290,39 @@ Configured limits:
 A slow client cannot stall the others: it exceeds the time or buffer limit and
 is disconnected rather than allowed to hold an outbound thread.
 
-### 5.3 Multi-instance — **partially**
+### 5.3 Multi-instance — **yes for events, no for limits**
 
-Conversations, friends and history survive in the shared database across
-instances, and `chat.distributed.enabled=true` moves *presence* to Redis. What
-does **not** cross instances today: the in-process STOMP broker (a user
-connected to instance B receives no live frames published from instance A),
-the rate-limit counters and the DM pair locks (both per-JVM). See §7.
+With `chat.distributed.enabled=true`:
+
+- **Presence** lives in Redis (`RedisPresenceStore`), so every instance answers
+  "who is online" from the same data and a name claim is atomic across the
+  cluster (`HSETNX`). Entries are cleared when a session disconnects; there is
+  no TTL yet, so a process that is killed leaves its users marked online until
+  it restarts (see §7.3).
+- **Every topic frame crosses instances.** `DistributedMessageRelay` serialises
+  `{instanceId, destination, payload}` onto the Redis Pub/Sub channel
+  `chat:cluster:events`; each node subscribes, discards envelopes it originated
+  (its own broker already delivered them) and replays the rest into its local
+  broker. Conversation events, typing hints, notifications and presence
+  broadcasts all take that path, so a client on node B receives what node A
+  published — which is why notifications use a per-user *topic* instead of
+  `/user/queue`.
+- **Payloads are complete, not deltas.** A presence frame carries the whole
+  sorted online list read from the shared store, so replaying it on another node
+  is correct rather than a partial view of the publishing node.
+
+What still does **not** cross instances: the fixed-window rate-limit counters,
+the DM-pair striped locks, and the in-process broker's own subscription table
+(relay is a replication layer on top of it, not a shared broker). A message
+delivered by both the direct send and the relay is deduplicated client-side by
+message id.
+
+The relay is covered by `DistributedMessageRelayTest` (two relay nodes with a
+mocked Redis template, asserting the envelope contract and self-echo
+suppression) and `CrossInstanceFanoutTest` (every event type reaches the relay
+with the right destination). **No run against a real Redis has been performed in
+this environment** — there is no Redis server on the machine — so the live
+two-node behaviour is reasoned-about and contract-tested, not observed.
 
 ### 5.4 Why the rules are safe
 
@@ -286,8 +384,13 @@ thread pools against each scenario and asserts the surviving row count.
 | Password storage | BCrypt (`spring-security-crypto`) — never plaintext, never reversible |
 | Sessions | Server-side Spring Security session; `changeSessionId()` on login (session-fixation defence); cookie is HttpOnly, SameSite=Lax, `Secure` behind `COOKIE_SECURE` |
 | Backend authorization | Every REST controller resolves the user from the session principal, never from the request body; services re-check membership/role before reads and writes (IDOR and privilege-escalation paths are covered by `WebSocketSecurityIntegrationTest` and the controller integration tests) |
-| WebSocket subscription auth | `/topic/conversations/{id}` subscriptions are intercepted and checked against the member table; anonymous or non-member subscriptions are refused (403) |
+| WebSocket subscription auth | `/topic/conversations/{id}` subscriptions are intercepted and checked against the member table; `/topic/notifications/{userId}` is refused for any session that is not that user; `/topic/users` needs an authenticated session. Anonymous or non-member subscriptions are refused (403) |
 | Sender cannot be spoofed | `senderId` comes from the connection's `Principal`, never from the payload |
+| Upload validation | Type decided by sniffing magic bytes against an allow-list (PNG, JPEG, GIF, WebP, PDF), never by the client's filename or `Content-Type`; per-file size cap applied after the bytes are read; stored under a generated `<prefix>_<uuid>.<ext>` name, with the resolved path re-checked against the upload root; `/uploads/**` requires a session and is served from the same directory the service writes to |
+| Attachment integrity | The reference stored on the message row is the URL the server generated; a client cannot point a message at an arbitrary path |
+| Forwarding is checked twice | A forward requires membership in the **source** and in the **destination**, so a member of B cannot pull content out of a conversation A they left |
+| Capability tokens | Invite links use a 128-bit `SecureRandom` token carried only in POST bodies, so it never lands in a URL, an access log, or a `Referer`; every unusable state (expired, exhausted, revoked, blocked, already a member) returns the same refusal |
+| Notification gating | Preferences are read from the database at publish time, not trusted from the client, and a notification that fails to publish never fails the business write that caused it |
 | Rate limiting | Fixed-window limiter (`security/RateLimitFilter` + `RateLimiter`): login and register per IP, friend requests per user, message sends per sender inside `PersistentMessageService` (one choke point for REST **and** STOMP). Refusals return 429 + `Retry-After`; retries of already-persisted sends never consume budget |
 | Response headers | Strict CSP with no `unsafe-*` (verified against the client's actual needs), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin` |
 | SQL injection | Spring Data JPA parameter binding throughout; no string-built SQL |
@@ -336,6 +439,24 @@ changed, which needs no configuration change.
   neither pending yet) can surface a 500 from the `uq_friendship` constraint.
   State stays consistent and a retry reports ALREADY_FRIENDS, but the mapping
   is imperfect.
+- **Invite-link joins have no dedicated budget.** They are gated by
+  authentication, the token itself, blocking, membership and the link's own
+  `maxUses`, but they are not behind a separate per-IP counter — a member who
+  has registered many accounts could spend a link they know about. Adding a
+  `RATE_LIMIT_INVITE_JOINS` window is the intended fix, not implemented.
+- **Notifications are not replayed.** They are deliberately not stored, so a
+  client that was offline misses the frame and recovers by reading unread
+  counts and pending-request lists on its next load. There is no notification
+  inbox endpoint.
+- **Ephemeral frames are not replayed either.** Typing hints and presence
+  deltas exist only while the socket is up; after a reconnect the client
+  refetches conversations and messages, and the next presence frame carries the
+  full list, so nothing has to be replayed — but a typing indicator that was in
+  flight is simply gone.
+- **Distributed presence has no expiry.** `RedisPresenceStore` keys are plain
+  hashes with no TTL and there is no sweep job, so a killed instance's users
+  remain online and keep their names until that instance restarts. Normal
+  disconnects (and silent peers noticed by the heartbeat watchdog) do clean up.
 - **Transport security (TLS) is external.** Run behind a TLS-terminating proxy
   or enable Tomcat's HTTPS connector, and set `COOKIE_SECURE=true`.
 
@@ -361,41 +482,45 @@ in-process.
 
 | Now | Planned |
 |---|---|
-| `enableSimpleBroker("/topic","/queue")` — subscriptions and messages live in this JVM only | Replace with `enableStompBrokerRelay(...)` pointing at RabbitMQ (STOMP plugin) or ActiveMQ |
-| A user connected to instance B never receives a message published from instance A | One logical topic shared by all instances, so `*`-broadcasts reach every subscriber |
+| `enableSimpleBroker("/topic","/queue")` — subscriptions live in this JVM, with `DistributedMessageRelay` re-publishing every topic frame it receives from Redis into that local broker | Replace with `enableStompBrokerRelay(...)` pointing at RabbitMQ (STOMP plugin) or ActiveMQ, so subscription state itself is shared |
+| Live frames do reach another instance when `chat.distributed.enabled=true`, through an application-level relay | No application-level replication step: one logical broker, so `*`-broadcasts, per-user queues and receipts behave identically on every node |
+| The relay is at-least-once with no persistence: a frame published while every node is reconnecting is lost (history is recovered from the DB, ephemeral hints are not) | Broker-side persistence/acknowledgement, so a frame survives a node being briefly down |
 
-This is the change that makes horizontal scaling meaningful: without a shared
-broker, scaling out silently fragments the chat.
+The relay is what makes scaling out usable today; the external broker is what
+would make it *simpler* — it removes the per-node fan-out step, the self-echo
+filter, and the reason notifications had to be modelled as topics rather than
+`/user/queue`.
 
 **Why session affinity alone is not enough.** Sticky sessions keep a user's
 socket on one instance, which does fix delivery *to that user* if every message
 for them is produced by the instance holding their socket. It does not help when
-instance A must broadcast to users on instance B. Sticky routing is a
-useful adjunct (it keeps user-destination resolution local) but it is not a
-substitute for a shared broker. With an external broker there is less need for
-affinity, though retaining it keeps `/user/**` translation local and avoids
+instance A must broadcast to users on instance B — that is exactly the case the
+Redis relay covers now, and the case a shared broker would cover without any
+application code. With an external broker there is less need for affinity,
+though retaining it keeps `/user/**` translation local and avoids
 cross-instance session lookup.
 
 ### 7.3 Presence that survives multiple instances
 
 | Now | Planned |
 |---|---|
-| Two `ConcurrentHashMap`s in one JVM | Presence in a shared store — Redis is the usual fit |
-| Name uniqueness by local `putIfAbsent` | Name uniqueness by an atomic cross-instance primitive (`SET NX` with a TTL), so two instances cannot both admit "alice" |
-| Lost on restart | Survives restart and is readable by every instance |
+| `RedisPresenceStore` when `chat.distributed.enabled=true`: two hashes (`chat:presence:users` by lowercased name, `chat:presence:sessions` by session id), name claims made atomic by `HSETNX` (`putIfAbsent`); two `ConcurrentHashMap`s in one JVM otherwise | The same, with the in-memory mode kept only for single-node development |
+| Entries are deleted by `unregister` on `SessionDisconnectEvent`, which the STOMP heartbeat watchdog also triggers for a *peer* that went silent | TTL on the presence entries (hash-field expiry, or `SET NX` + `EXPIRE` keys with an index hash), so an instance that dies takes its own names with it |
+| Lost on restart in in-memory mode; in Redis mode a clean shutdown clears names but a crash leaves them | Survives restart without stale registrations |
+| Presence changes are relayed to every node as a complete snapshot | Fan-out through the shared broker instead of the application-level relay |
 
-Consistency points to settle before this is attempted:
+Consistency points that still deserve attention:
 
-- **Authority.** One store must decide uniqueness, or the race reappears across
-  processes. A local check on each instance is not enough.
-- **Staleness.** A crashed instance must release its names. Requires a TTL
-  refreshed by a heartbeat, or an explicit instance-leaves event that purges
-  its registrations.
-- **Read-your-writes.** A user who joins should immediately see themselves in
-  the list. The join response path should read back from the shared store
-  rather than from a local cache.
-- **Fan-out of presence events.** `/topic/users` must be published through the
-  shared broker, not a local template, or the user list diverges per instance.
+- **Authority.** One store decides uniqueness: `HSETNX` is atomic in Redis, so
+  two instances cannot both admit "alice" — but the loser currently surfaces as
+  `USERNAME_TAKEN` rather than a re-attachment of the same user's second tab.
+- **Staleness — open gap.** There is no TTL anywhere in
+  `com.example.chat.infrastructure.redis`. A JVM that is killed never reaches
+  `unregister`, so its users stay listed as online and hold their names until
+  that instance restarts and re-registers them. Everything else in this section
+  assumes that is fixed first.
+- **Read-your-writes.** A join reads back from the shared store, so a client
+  sees itself immediately — worth re-checking if the store is ever cached.
 
 ### 7.4 Durability, acknowledgements, offline delivery
 
@@ -403,8 +528,10 @@ Consistency points to settle before this is attempted:
 |---|---|
 | Messages are persisted before broadcast; events are published only after commit | STOMP `ACK` frames so delivery is confirmed per message |
 | Sends are idempotent on `clientMessageId` — a retry never duplicates a row | Explicit `NACK` + redelivery policy for failed sends |
-| The client refetches history on reconnect, so frames missed while offline are recovered from the DB | Offline inbox / per-user queue, drained on reconnect, instead of a full refetch |
-| Client dedupes by message id when an event races the REST response | |
+| The client negotiates STOMP 1.1 heartbeats, watches for inbound silence, reconnects with capped exponential backoff (1 s–15 s) and then refetches conversations and history over REST | Offline inbox / per-user queue, drained on reconnect, instead of a full refetch |
+| The composer falls back to `POST /api/conversations/{id}/messages` while the socket is down, so a send does not wait for the reconnect | |
+| Client dedupes by message id when an event races the REST response or a relay replay | |
+| Notifications are not stored; an offline client infers the state from unread counts and pending-request lists | A stored notification inbox with a read/clear API |
 
 Message IDs are already server-generated and unique, which is the precondition
 for idempotent writes.
@@ -413,17 +540,19 @@ for idempotent writes.
 
 | Now | Planned |
 |---|---|
-| Relational store: embedded H2 in PostgreSQL mode, Flyway V1–V4 as sole schema owner, `ddl-auto: validate` (any entity/migration drift fails boot) | Managed PostgreSQL for real deployments |
+| Relational store: embedded H2 in PostgreSQL mode, Flyway V1–V5 as sole schema owner, `ddl-auto: validate` (any entity/migration drift fails boot) | Managed PostgreSQL for real deployments |
 | `GET /api/conversations/{id}/messages` history behind session auth | Retention and privacy policy for stored content |
 | Write path idempotent on `clientMessageId` | Online schema migrations with expansion/contraction phases |
+| Uploads on the local filesystem under `app.upload.dir`, served from that same directory | Object storage (S3-compatible) with signed URLs; the `.meta` sidecar that records the advertised filename would move with it |
 
 ### 7.6 Authentication and authorization
 
 | Now | Planned |
 |---|---|
 | Email + BCrypt password → server-side session; the WebSocket handshake reuses the same session principal | SSO / signed token carried at handshake time for stateless scale-out |
-| The handshake prefers a real authenticated principal (`AnonymousHandshakeHandler` seam, now exercised) | Authority mapping for administrative actions beyond owner/admin/moderator |
-| Conversation subscriptions authorized by membership; REST handlers check membership/role per call | |
+| The handshake prefers a real authenticated principal (`AnonymousHandshakeHandler` seam, now exercised) | Authority mapping for administrative actions beyond owner/moderator |
+| Conversation subscriptions authorized by membership, notification subscriptions by ownership; REST handlers check membership/role per call | |
+| Group roles are `OWNER` / `MODERATOR` / `MEMBER`, with the owner the only one who can change roles | Finer-grained permissions (who may pin, invite, or read stats) if the product needs them |
 | Rate limits per identity for messages and friend requests, per IP for auth endpoints | Shared (Redis) counters so limits hold across instances |
 
 ### 7.7 Monitoring and health
@@ -440,14 +569,19 @@ for idempotent writes.
 ### 7.8 Horizontal scaling — the order to do it in
 
 1. TLS termination (and `COOKIE_SECURE=true`); optionally a CSRF token for the SPA.
-2. External broker (`enableStompBrokerRelay`) — this unblocks scaling.
-3. Shared presence with TTL-based expiry (`chat.distributed.enabled` is the first step).
-4. Load balancer; verify WebSocket upgrades pass through.
-5. Shared rate-limit counters; let DB unique constraints arbitrate cross-node races with clean 409s.
+2. Presence expiry (TTL or a shutdown sweep) — otherwise a crashed node holds
+   names hostage before anything else is even tried.
+3. Load balancer; verify WebSocket upgrades pass through. Safe to try now
+   because `chat.distributed.enabled` already relays events and shares presence.
+4. Shared rate-limit counters; let DB unique constraints arbitrate cross-node
+   races with clean 409s.
+5. External broker (`enableStompBrokerRelay`) to retire the application-level
+   relay, and with it the self-echo filter and the topic-shaped notifications.
 6. Metrics and alerting.
 
-Doing 4 before 2 produces a cluster that appears to work and silently loses
-messages.
+The order changed when the relay landed: step 3 used to be pointless before an
+external broker, because scaling out without any cross-node fan-out silently
+fragments the chat. It is now merely insufficient rather than broken.
 
 ---
 
@@ -475,6 +609,20 @@ messages.
 | 18 | Strict CSP with no `unsafe-*` | Compatible with the textContent-only client by construction; blocks injected script even if XSS slipped through |
 | 19 | Flyway as sole schema owner, `ddl-auto: validate` | Entity/migration drift fails boot loudly instead of silently diverging |
 | 20 | `changeSessionId()` on login | Session-fixation defence without a second cookie |
+| 21 | Typing hints throttled server-side (one per member per 2 s) rather than per keystroke | The frame is a hint, so the cost of a second subscriber in a large group must not scale with typing speed |
+| 22 | Read state stored as one position per member (`lastReadAt` + `lastReadMessageId`), not a row per message | A per-message receipt table grows with every message × every member; one position answers both `readByCount` and `unreadCount` |
+| 23 | Search and pinning are query-side, not a denormalised index | PostgreSQL/H2 `LIKE` over the conversation's own rows is enough at this scale; `uq`-style constraints keep pins honest |
+| 24 | Forwarding re-checked for source membership | The destination check is implicit in `sendMessage`; without the source check, leaving a group would not stop you draining its history into another conversation |
+| 25 | Attachment type from magic bytes, filename from the server, size checked after reading | A client controls its own filename and `Content-Type`; neither is evidence of what the bytes are |
+| 26 | `multipart.max-file-size` set above the application cap, which then re-checks | Spring's 1 MB default would reject legitimate images before the service that owns the real limit ever sees the bytes |
+| 27 | Notifications on a guarded per-user **topic**, published after commit | `/user/queue/**` is not carried by the relay; the guard, not the UUID in the path, is what keeps them private |
+| 28 | Notifications are not persisted | They point at rows that already exist; a second copy of the truth would drift and give offline clients a backlog to reconcile |
+| 29 | Invite-link token in the POST body, 128-bit `SecureRandom`, uniform refusal for every unusable state | URLs reach access logs and `Referer`; distinguishing "expired" from "revoked" from "you are blocked" turns the endpoint into an oracle about the group |
+| 30 | Pessimistic lock read-through for token redemption (`findGroupIdByToken` before the locked load) | Hibernate will not refresh an entity already in the persistence context, so a locked JPQL read on the same id returns the stale copy and two requests can spend one link |
+| 31 | Cross-instance relay is destination-agnostic and drops only its own echo | Adding an event type needs no relay change — but forgetting to publish to the relay silently splits the cluster, which is what `CrossInstanceFanoutTest` exists to prevent |
+| 32 | Client reconnect = heartbeat watchdog → capped backoff → REST catch-up → dedupe by message id | Recovers missed durable frames without a per-user queue, and tolerates at-least-once relay delivery without showing duplicates |
+| 33 | In-app confirmation dialog instead of `window.confirm` | The native dialog cannot be styled, is announced with the page title rather than the question, and steals focus; a dialog that resolves only on the confirm button makes "cancelled" and "dismissed" the same answer |
+| 34 | `/uploads/**` location derived from `app.upload.dir` | The write path and the read path must be one setting; a hardcoded location stores files where nothing serves them |
 
 ---
 
@@ -488,17 +636,26 @@ messages.
 | Concurrency (`DistributedConcurrencyTest`) | Racing threads claiming a presence name, including mixed case |
 | Concurrency (`ConcurrencyRaceTest`) | Latched thread pools against each check-then-write race in §5.5 — idempotent sends, competing joins, double-accepts, reaction toggles, DM creation — asserting the surviving row counts |
 | Unit (`InMemoryPresenceStoreTest`) | The port's contract: atomicity, lookup, removal |
-| Contract (`FrontendContractTest`) | `app.js` destinations match `MessageRouter`; no HTML sink; page stays zoomable; loading vs empty states exist |
+| Contract (`FrontendContractTest`) | `app.js` destinations match `MessageRouter`; no HTML sink; page stays zoomable; loading vs empty states exist; the modal is an accessible dialog; every destructive call is preceded by a confirmation |
 | Integration (`ChatWebSocketIntegrationTest`) | Real sockets, 2–3 simultaneous clients: presence fan-out, duplicate-name refusal, oversized input, disconnect |
 | Integration (`WebSocketSecurityIntegrationTest`) | Unauthorized connections and non-member subscriptions refused; delivery only to authorized recipients |
 | Integration (`RateLimitIntegrationTest`) | Real HTTP: 429 + `RATE_LIMITED` + `Retry-After` on exhausted login/friend/message budgets; reads unaffected |
 | Integration (`SessionHardeningIntegrationTest`) | Cookie HttpOnly/SameSite, session id rotation on login, CSP/X-Frame-Options/nosniff headers present |
 | Integration (`HealthEndpointIntegrationTest`, `FriendControllerIntegrationTest`, `FullE2EChatJourneyTest`) | The REST surface: health, friend requests, register → friend → chat journey |
 | Integration (`LandingPageIntegrationTest`) | `/` serves the landing page, `/app` serves the client, every marketing button resolves to a real route, claimed security features are actually enforced |
+| Integration (`UploadServingTest`) | The application boots on a non-default `app.upload.dir` and a stored upload is served back over `/uploads/**`; anonymous and traversing reads are refused — the write path and the read path must stay one setting |
+| Engagement (`TypingServiceTest`, `ReadReceiptTest`, `PinnedMessageTest`, `MessageSearchTest`, `MessageForwardingTest`, `MessageAttachmentTest`) | The rules behind each Phase-4 feature: throttled ephemeral frames, per-member read positions, pin permissions, member-scoped search, dual membership checks on forwards, attachment validation |
+| Groups (`GroupInviteLinkTest`, `GroupInviteLinkRestTest`) | 20 application-level link rules (entropy, expiry, use count, revoke, blocking, uniform refusal) plus 7 HTTP-surface tests for routing and status codes |
+| Notifications (`NotificationIntegrationTest`) | 13 cases over real STOMP sessions: every category reaches the right private topic, preference switches suppress it, and no other session can subscribe |
+| Distributed (`DistributedMessageRelayTest`, `CrossInstanceFanoutTest`) | The Redis envelope contract between two relay nodes (replay, self-echo suppression, malformed envelopes ignored) and, with a mocked relay, that every event type a user can cause is handed to it with the correct destination |
 
 `ChatWebSocketIntegrationTest` asserts negatively as well as positively: a
 refused duplicate join must publish **no** presence frame — a test that would
 pass trivially if refusals were indistinguishable from successful joins.
+`CrossInstanceFanoutTest` does the same for the relay: `verifyNoInteractions`
+would fail a feature that persists correctly but never crosses nodes, which is
+the failure mode a distributed deployment actually exhibits.
 
-Run everything with `./mvnw.cmd test` (114 tests, all against a throwaway
-in-memory database; no external services required).
+Run everything with `./mvnw.cmd test` (211 tests, all against a throwaway
+in-memory database; no external services required — the distributed tests mock
+Redis rather than needing a server).
