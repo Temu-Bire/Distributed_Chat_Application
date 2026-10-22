@@ -30,6 +30,8 @@ class FrontendContractTest {
 
     private static final Path CHAT_JS = Path.of("src/main/resources/static/js/app.js");
 
+    private static final Path STYLES_CSS = Path.of("src/main/resources/static/css/styles.css");
+
     private static final Pattern DEST_MAP =
             Pattern.compile("DEST\\s*=\\s*Object\\.freeze\\s*\\((\\{.*?})\\)\\s*;", Pattern.DOTALL);
 
@@ -206,6 +208,35 @@ class FrontendContractTest {
         assertThat(js)
                 .as("plain members get the facts, not a form whose Save button would be refused")
                 .contains("$('group-info-edit').hidden = !isAdmin;");
+    }
+
+    @Test
+    @DisplayName("the chat header opens the card of whoever is being talked to")
+    void chatHeaderOpensTheRightCard() throws IOException {
+        String html = Files.readString(Path.of("src/main/resources/static/index.html"), StandardCharsets.UTF_8);
+        assertThat(html)
+                .as("the picture and the name are one control, and a button may only hold phrasing "
+                        + "content, so the title is a span rather than a heading")
+                .containsPattern("(?s)<button id=\"chat-person-btn\"[^>]*>.*?id=\"chat-avatar\".*?id=\"chat-title\"")
+                .doesNotContain("<h2 id=\"chat-title\"");
+
+        String js = Files.readString(CHAT_JS, StandardCharsets.UTF_8);
+        assertThat(js)
+                .as("a group gets the group card, a private chat gets the person's card, and the "
+                        + "control names the card it opens")
+                .contains("$('chat-person-btn').addEventListener('click', () => {")
+                .contains("if (isGroup(conv)) openGroupProfile(conv.id);")
+                .contains("'View ' + convTitle(conv) + (isGroup(conv) ? ' group info' : ' profile')");
+    }
+
+    @Test
+    @DisplayName("the phone rail stays on screen whatever page is open")
+    void mobileRailStaysOnScreen() throws IOException {
+        String css = Files.readString(STYLES_CSS, StandardCharsets.UTF_8);
+        assertThat(css)
+                .as("a bare 1fr row is minmax(auto, 1fr): a tall page grows it and pushes the rail "
+                        + "below the fold, so the scrolling area has to be capped at a zero minimum")
+                .containsPattern("(?s)@media \\(max-width: 980px\\).*?grid-template-rows: minmax\\(0, 1fr\\) 64px");
     }
 
     @Test

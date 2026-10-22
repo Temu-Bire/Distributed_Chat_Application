@@ -2367,6 +2367,12 @@
         $('group-back-btn').addEventListener('click', () => openView('chats', {
             conversationId: state.currentConversation && state.currentConversation.id
         }));
+        $('chat-person-btn').addEventListener('click', () => {
+            const conv = state.currentConversation;
+            if (!conv) return;
+            if (isGroup(conv)) openGroupProfile(conv.id);
+            else openUserProfile(conv.otherUserId);
+        });
         $('chat-info-btn').addEventListener('click', () => {
             const conv = state.currentConversation;
             if (!conv) return;
@@ -2941,6 +2947,8 @@
     function renderChatHeader(peer) {
         const conv = state.currentConversation;
         if (!conv) return;
+        $('chat-person-btn').setAttribute('aria-label',
+            'View ' + convTitle(conv) + (isGroup(conv) ? ' group info' : ' profile'));
         const dot = $('chat-online-dot');
         dot.hidden = true;
         if (isGroup(conv)) {

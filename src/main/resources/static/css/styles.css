@@ -233,9 +233,17 @@ ul { list-style: none; }
     display: flex; align-items: center; gap: 12px; padding: 14px 18px;
     background: var(--surface); border-bottom: 1px solid var(--line);
 }
-.chat-head__meta { flex: 1; }
-.chat-head h2 { font-size: 16px; }
-.chat-head p { color: var(--sub); font-size: 12px; }
+.chat-head__person {
+    display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0;
+    text-align: left;
+}
+.chat-head__person:hover .chat-head__name { text-decoration: underline; }
+.chat-head__meta { min-width: 0; }
+.chat-head__name { display: block; font-size: 16px; font-weight: 700; }
+.chat-head__sub {
+    display: block; color: var(--sub); font-size: 12px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .chat-thread {
     flex: 1; overflow: auto; padding: 24px; display: flex; flex-direction: column; gap: 10px;
     background:
@@ -518,7 +526,7 @@ ul { list-style: none; }
     .auth-screen { grid-template-columns: 1fr; }
     .auth-art { display: none; }
     .auth-panel { margin: 0; height: 100%; border-radius: 0; }
-    .app-shell, .app-shell.is-wide { grid-template-columns: 1fr; grid-template-rows: 1fr 64px; }
+    .app-shell, .app-shell.is-wide { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) 64px; }
     .app-shell.is-wide .list-col { display: none; }
     .rail {
         order: 2; flex-direction: row; align-items: center; padding: 0 8px;
