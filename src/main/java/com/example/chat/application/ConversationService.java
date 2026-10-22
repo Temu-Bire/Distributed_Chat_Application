@@ -3,6 +3,7 @@ package com.example.chat.application;
 import com.example.chat.domain.entity.*;
 import com.example.chat.dto.conversation.*;
 import com.example.chat.dto.group.BlockedUserResponse;
+import com.example.chat.dto.group.GroupProfileResponse;
 import com.example.chat.exception.ChatException;
 import com.example.chat.infrastructure.repository.*;
 import org.springframework.stereotype.Service;
@@ -182,22 +183,69 @@ public class ConversationService {
     @Transactional(readOnly = true)
     public List<ConversationMemberResponse> getConversationMembers(UUID conversationId, UUID currentUserId) {
         requireMembership(conversationId, currentUserId);
-        List<ConversationMemberEntity> members = memberRepository.findByConversationId(conversationId);
+        return memberResponses(conversationId);
+    }
 
+    /**
+     * The group card. Members get the roster; anybody else gets the same public
+     * facts discovery already advertises - a public group's name and headcount
+     * are open, but who is inside it is not.
+     */
+    @Transactional(readOnly = true)
+    public GroupProfileResponse getGroupProfile(UUID conversationId, UUID currentUserId) {
+        ConversationEntity conv = conversationRepository.findById(conversationId)
+            .orElseThrow(() -> new ChatException(ChatException.CONVERSATION_NOT_FOUND, "Group not found"));
+
+        if (conv.getType() != ConversationType.GROUP) {
+            throw new ChatException(ChatException.INVALID_COMMAND, "Only groups have a profile");
+        }
+
+        ConversationMemberEntity mine = memberRepository
+            .findByConversationIdAndUserId(conversationId, currentUserId)
+            .orElse(null);
+
+        if (mine == null && conv.isPrivate()) {
+            throw new ChatException(ChatException.NOT_MEMBER, "This group is private");
+        }
+
+        int memberCount = (int) memberRepository.countByConversationId(conversationId);
+        return new GroupProfileResponse(
+            conv.getId(),
+            conv.getTitle(),
+            conv.getDescription(),
+            conv.getAvatarUrl(),
+            conv.isPrivate(),
+            conv.getCreatedAt(),
+            memberCount,
+            mine != null ? "MEMBER" : membershipStatusOf(conversationId, currentUserId),
+            mine != null ? mine.getRole() : null,
+            mine != null ? memberResponses(conversationId) : List.of()
+        );
+    }
+
+    private String membershipStatusOf(UUID conversationId, UUID currentUserId) {
+        if (groupBlockRepository.existsByGroupIdAndUserId(conversationId, currentUserId)) {
+            return "BLOCKED";
+        }
+        if (groupJoinRequestRepository.existsByGroupIdAndUserId(conversationId, currentUserId)) {
+            return "PENDING";
+        }
+        return "NONE";
+    }
+
+    /** The roster with each member's role, presence and joined date. */
+    private List<ConversationMemberResponse> memberResponses(UUID conversationId) {
         List<ConversationMemberResponse> result = new ArrayList<>();
-        for (ConversationMemberEntity m : members) {
-            userRepository.findById(m.getUserId()).ifPresent(user -> {
-                boolean online = presenceService.isOnline(user.getUsername());
-                result.add(new ConversationMemberResponse(
-                    user.getId(),
-                    user.getUsername(),
-                    user.getDisplayName(),
-                    user.getAvatarUrl(),
-                    m.getRole(),
-                    m.getJoinedAt(),
-                    online
-                ));
-            });
+        for (ConversationMemberEntity m : memberRepository.findByConversationId(conversationId)) {
+            userRepository.findById(m.getUserId()).ifPresent(user -> result.add(new ConversationMemberResponse(
+                user.getId(),
+                user.getUsername(),
+                user.getDisplayName(),
+                user.getAvatarUrl(),
+                m.getRole(),
+                m.getJoinedAt(),
+                presenceService.isOnline(user.getUsername())
+            )));
         }
         return result;
     }

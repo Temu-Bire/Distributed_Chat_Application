@@ -15,6 +15,7 @@ import com.example.chat.dto.group.GroupDiscoveryResponse;
 import com.example.chat.dto.group.GroupInvitationResponse;
 import com.example.chat.dto.group.GroupInviteLinkResponse;
 import com.example.chat.dto.group.GroupJoinRequestResponse;
+import com.example.chat.dto.group.GroupProfileResponse;
 import com.example.chat.dto.group.InvitePreviewResponse;
 import com.example.chat.dto.group.InviteToGroupRequest;
 import com.example.chat.dto.group.JoinByLinkRequest;
@@ -206,6 +207,18 @@ public class ConversationController {
             @PathVariable("id") UUID groupId) {
         UserProfileResponse user = authService.getCurrentUser(principal);
         return ResponseEntity.ok(conversationService.getBlockedMembers(groupId, user.id()));
+    }
+
+    /**
+     * The group card. Members read the roster with it; for everybody else the
+     * group is public and only its published facts come back.
+     */
+    @GetMapping("/groups/{id}/profile")
+    public ResponseEntity<GroupProfileResponse> getGroupProfile(
+            Principal principal,
+            @PathVariable("id") UUID groupId) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        return ResponseEntity.ok(conversationService.getGroupProfile(groupId, user.id()));
     }
 
     @GetMapping("/groups/discover")

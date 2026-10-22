@@ -218,7 +218,7 @@ public class GroupJoinRequestService {
         for (ConversationEntity group : groups) {
             if (group.getType() != ConversationType.GROUP) continue;
 
-            int memberCount = memberRepository.findByConversationId(group.getId()).size();
+            int memberCount = (int) memberRepository.countByConversationId(group.getId());
             String membershipStatus = "NONE";
 
             if (memberRepository.existsByConversationIdAndUserId(group.getId(), userId)) {

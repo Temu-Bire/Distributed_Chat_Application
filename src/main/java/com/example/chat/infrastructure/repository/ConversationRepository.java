@@ -41,9 +41,15 @@ public interface ConversationRepository extends JpaRepository<ConversationEntity
 
     Optional<ConversationEntity> findFirstByType(ConversationType type);
 
-    @Query("SELECT c FROM ConversationEntity c WHERE c.type = 'GROUP' ORDER BY c.createdAt DESC")
+    /**
+     * Discovery listings. A private group is absent by design: its title and
+     * description are not advertising space, and reaching one means an
+     * invitation or an invite link.
+     */
+    @Query("SELECT c FROM ConversationEntity c WHERE c.type = 'GROUP' AND c.isPrivate = false ORDER BY c.createdAt DESC")
     Page<ConversationEntity> findGroups(Pageable pageable);
 
-    @Query("SELECT c FROM ConversationEntity c WHERE c.type = 'GROUP' AND LOWER(c.title) LIKE LOWER(CONCAT('%', :query, '%')) ORDER BY c.createdAt DESC")
+    @Query("SELECT c FROM ConversationEntity c WHERE c.type = 'GROUP' AND c.isPrivate = false " +
+           "AND LOWER(c.title) LIKE LOWER(CONCAT('%', :query, '%')) ORDER BY c.createdAt DESC")
     Page<ConversationEntity> findGroupsByTitleContaining(@Param("query") String query, Pageable pageable);
 }
