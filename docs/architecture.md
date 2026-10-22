@@ -10,8 +10,9 @@ planned exists in the code today.
 
 A single Spring Boot process that:
 
-- serves a landing page (`/` → `landing.html`), the chat client (`/app` →
-  `index.html`) and its static assets,
+- serves the chat client (`/app` → `index.html`) and its static assets, and
+  answers `/` with the public landing page — unless the request carries a live
+  session, in which case `PageController` redirects straight to `/app`,
 - authenticates users with email + password (BCrypt), keeps the identity in a
   server-side Spring Security session, and reuses that session principal for the
   WebSocket handshake,
@@ -669,6 +670,8 @@ fragments the chat. It is now merely insufficient rather than broken.
 | 40 | The client treats a `/topic/users` frame as "something changed", never as the answer | The frame carries the raw connected list, accounts that hid their status included. Rendering it would leak precisely what the setting exists to withhold, so the frame only schedules a debounced re-read of the REST view, which is already the authority |
 | 41 | The group page and the group card read the same profile endpoint | Two endpoints mean two visibility rules that can drift; one read means the roster a member sees on the page is the same roster the card shows, and the server decides both. It also turned two calls (details + members) into one |
 | 42 | Cards count circles rather than listing them | A profile that listed friends or group members would make a public card into an enumeration tool for somebody else's contacts; two integers answer "how do we know each other" without exposing anyone who did not choose to be seen |
+| 43 | `/` decides from the session, on the server | A view controller cannot branch, and a script that redirects after load shows the marketing page to someone who has already bought it. `PageController` reads the session and either forwards to `landing.html` or redirects to `/app`, so an anonymous crawl and a signed-in bookmark both land where they belong (`LandingPageIntegrationTest`) |
+| 44 | The phone shell's scrolling row is `minmax(0, 1fr)` | A bare `1fr` is `minmax(auto, 1fr)`: it grows to its content, so a tall page pushed the bottom rail below the fold and left no way back. Capping the minimum at 0 keeps the rail pinned and moves the scrolling where it belongs — inside the page |
 
 ---
 
@@ -682,13 +685,13 @@ fragments the chat. It is now merely insufficient rather than broken.
 | Concurrency (`DistributedConcurrencyTest`) | Racing threads claiming a presence name, including mixed case |
 | Concurrency (`ConcurrencyRaceTest`) | Latched thread pools against each check-then-write race in §5.5 — idempotent sends, competing joins, double-accepts, reaction toggles, DM creation — asserting the surviving row counts |
 | Unit (`InMemoryPresenceStoreTest`) | The port's contract: atomicity, lookup, removal |
-| Contract (`FrontendContractTest`) | `app.js` destinations match `MessageRouter`; no HTML sink; page stays zoomable; loading vs empty states exist; the modal is an accessible dialog; the profile chip opens settings and the settings page has a phone-only way back; a person row and a group row each open their card, and the card only shows what the endpoint dares to; every destructive call is preceded by a confirmation |
+| Contract (`FrontendContractTest`) | `app.js` destinations match `MessageRouter`; no HTML sink; page stays zoomable; loading vs empty states exist; the modal is an accessible dialog; the profile chip opens settings and the settings page has a phone-only way back; a person row, the chat header and a group row each open their card, and the card only shows what the endpoint dares to; the phone rail stays inside the viewport on every page; every destructive call is preceded by a confirmation |
 | Integration (`ChatWebSocketIntegrationTest`) | Real sockets, 2–3 simultaneous clients: presence fan-out, duplicate-name refusal, oversized input, disconnect |
 | Integration (`WebSocketSecurityIntegrationTest`) | Unauthorized connections and non-member subscriptions refused; delivery only to authorized recipients |
 | Integration (`RateLimitIntegrationTest`) | Real HTTP: 429 + `RATE_LIMITED` + `Retry-After` on exhausted login/friend/message budgets; reads unaffected |
 | Integration (`SessionHardeningIntegrationTest`) | Cookie HttpOnly/SameSite, session id rotation on login, CSP/X-Frame-Options/nosniff headers present |
 | Integration (`HealthEndpointIntegrationTest`, `FriendControllerIntegrationTest`, `FullE2EChatJourneyTest`) | The REST surface: health, friend requests, register → friend → chat journey |
-| Integration (`LandingPageIntegrationTest`) | `/` serves the landing page, `/app` serves the client, every marketing button resolves to a real route, claimed security features are actually enforced |
+| Integration (`LandingPageIntegrationTest`) | `/` serves the landing page to an anonymous visitor and redirects a signed-in one to `/app`, `/app` serves the client, every marketing button resolves to a real route, claimed security features are actually enforced |
 | Integration (`UploadServingTest`) | The application boots on a non-default `app.upload.dir` and a stored upload is served back over `/uploads/**`; anonymous and traversing reads are refused — the write path and the read path must stay one setting |
 | Integration (`DataSeederTest`, `DataSeederAtomicityTest`) | The optional demo world boots on a private in-memory database and is actually usable: all ten accounts log in, the friendship graph and the moderation surface (moderator, join request, invitation, invite link, block) exist, the threads carry a pin, forward, reply, edit, soft delete and read receipt, preferences differ per account, and a second run changes nothing — plus a forced mid-seed failure proving nothing is left behind for the "already seeded" guard to mistake for success |
 | Engagement (`TypingServiceTest`, `ReadReceiptTest`, `PinnedMessageTest`, `MessageSearchTest`, `MessageForwardingTest`, `MessageAttachmentTest`) | The rules behind each Phase-4 feature: throttled ephemeral frames, per-member read positions, pin permissions, member-scoped search, dual membership checks on forwards, attachment validation |
@@ -704,7 +707,7 @@ pass trivially if refusals were indistinguishable from successful joins.
 would fail a feature that persists correctly but never crosses nodes, which is
 the failure mode a distributed deployment actually exhibits.
 
-Run everything with `./mvnw.cmd test` (245 tests across 38 classes, all against a
+Run everything with `./mvnw.cmd test` (248 tests across 38 classes, all against a
 throwaway in-memory database; no external services required — the distributed
 tests mock Redis rather than needing a server, and `DataSeederTest` overrides the
 datasource URL so its ten seeded accounts cannot leak into the database the rest

@@ -42,7 +42,7 @@ The application evolved from an initial single-process Java TCP socket and Swing
 - **Loading & Empty States:** Conversation list and message thread distinguish "still loading" from "genuinely empty"; submit buttons show busy feedback.
 - **Confirmation Dialogs:** Every destructive action (delete message, remove friend, remove or block member, revoke invite link, leave or delete group, remove avatar, log out) goes through an accessible in-app dialog (`role="dialog"`, `aria-modal`, focus trap, Escape = cancel) instead of `window.confirm`.
 - **Resilient Connection:** STOMP 1.1 heartbeats with an inbound-silence watchdog, capped exponential reconnect (1 s → 15 s), REST catch-up of everything missed while offline, and a REST fallback so the composer still sends while the socket is down.
-- **Landing Page:** `/` serves a responsive marketing page whose Log in / Get started buttons route into the real client at `/app`.
+- **Landing Page:** `/` serves a short public page whose Log in / Get started buttons route into the real client at `/app`. A visitor who already has a session is redirected to `/app` instead — the page decides from the session, not from a script that loads first.
 - **Security-First:** 100% safe DOM rendering using `textContent` (zero `innerHTML` sinks, verified by automated tests), strict CSP with no `unsafe-*`, HttpOnly/SameSite session cookies with rotation on login, and 429 rate limits on login, registration, friend requests, and message sends.
 
 ### 🔐 User Accounts & Authentication
@@ -56,7 +56,7 @@ The application evolved from an initial single-process Java TCP socket and Swing
 - **Friend Requests:** Send, accept, reject, and cancel requests; incoming/outgoing lists persisted in the database.
 - **Friends Directory:** Friends, request counts, and message shortcuts all load from `/api/friends` and `/api/users/search` — never hardcoded.
 - **Friendship Status in Search:** Every search result carries its `NONE / PENDING_OUTGOING / PENDING_INGOING / FRIENDS` state so the UI can show the right action.
-- **Public Profile Cards:** Tap any person — a friend row, a pending request, a search result, or a name in a group roster — to read their display name, avatar, bio, join date, whether they are online, your relationship, and how many friends and groups you have in common. The card is built from `GET /api/users/{id}`, which never carries an email address, and a deactivated account reads as not found.
+- **Public Profile Cards:** Tap any person — a friend row, a pending request, a search result, a name in a group roster, or the avatar and name in the header of their chat — to read their display name, avatar, bio, join date, whether they are online, your relationship, and how many friends and groups you have in common. The card is built from `GET /api/users/{id}`, which never carries an email address, and a deactivated account reads as not found.
 - **Online Visibility Is Enforced, Not Decorative:** The `Show online status` switch is honoured on every surface that displays presence — friends list, search results, group roster, chat header, and the profile card, which says "Online status hidden" instead of reporting a hidden-status user as offline.
 
 ### 💬 Persistent Conversations & Group Chats
@@ -64,7 +64,7 @@ The application evolved from an initial single-process Java TCP socket and Swing
 - **Multi-Member Group Chats:** Create groups with custom titles, descriptions, and avatars.
 - **Public / Private Groups:** Privacy is stored per group; only public groups appear in discovery, while private groups are reachable by invitation or invite link.
 - **Group Discovery & Join Requests:** Browse public groups, request to join, and let owners or moderators accept, reject, or withdraw the request.
-- **Group Card, With Its Roster:** Any group you can name opens a card — picture, visibility, description, size, the date it was created, and your own role. Members also get the roster with each person's role, and every name in it opens that person's profile. A stranger on a public group gets exactly the facts discovery already advertises and no names, and a private group is refused without echoing its title. The group page reads the same endpoint, so one server-side decision is what limits both.
+- **Group Card, With Its Roster:** Any group you can name — from the discovery row, or from the picture and title in the header of the chat itself — opens a card: picture, visibility, description, size, the date it was created, and your own role. Members also get the roster with each person's role, and every name in it opens that person's profile. A stranger on a public group gets exactly the facts discovery already advertises and no names, and a private group is refused without echoing its title. The group page reads the same endpoint, so one server-side decision is what limits both.
 - **Group Invitations:** Owners and moderators invite friends to groups; invitees accept, reject, or see cancellations.
 - **Invitation Links:** Owners and moderators create revoke-able links (128-bit random token). The token travels only in a POST body, preview shows the group before joining, and joining re-checks blocking, existing membership, and the link's own expiry/use limit — including for private groups.
 - **Role-Based Group Administration:** `OWNER` / `MODERATOR` / `MEMBER`. Moderators and owners edit the group, add or remove members, review join requests, invite, block and pin; only the owner changes roles, and ownership moves by the owner leaving.
@@ -268,8 +268,8 @@ Run all automated tests with Maven:
 | **`ReadReceiptTest`** | 5 | Last-read position, `readByCount` aggregation, `READ_UPDATE` broadcast, non-member refusal, unread count |
 | **`TypingServiceTest`** | 4 | Ephemeral `TYPING` broadcast, non-member refusal, 2 s throttle per member per conversation, independent start/stop throttles |
 | **`UploadServiceTest`** | 6 | Storage path safety, generated names, extension sniffing from magic bytes, oversized rejection, disallowed type rejection, delete of an orphaned file |
-| **`FrontendContractTest`** | 8 | `app.js` pins exactly the server's STOMP destinations, zero `innerHTML` sinks, page stays zoomable and shows loading vs empty states, the modal is an accessible dialog, settings can be opened from the profile chip and left again on a phone, every destructive action confirms before it calls, every person row opens a profile card, and both group card and group page read the one endpoint that decides the roster |
-| **`LandingPageIntegrationTest`** | 4 | `/` serves the landing page, `/app` serves the client, every button resolves to a real route, marketing security claims match enforcement |
+| **`FrontendContractTest`** | 10 | `app.js` pins exactly the server's STOMP destinations, zero `innerHTML` sinks, page stays zoomable and shows loading vs empty states, the modal is an accessible dialog, settings can be opened from the profile chip and left again on a phone, every destructive action confirms before it calls, every person row opens a profile card, the chat header opens the card of whoever is being talked to, the phone rail stays on screen whatever page is open, and both group card and group page read the one endpoint that decides the roster |
+| **`LandingPageIntegrationTest`** | 5 | `/` serves the landing page to an anonymous visitor and redirects a signed-in one to `/app`, `/app` serves the client, every button resolves to a real route, marketing security claims match enforcement |
 | **`InMemoryPresenceStoreTest`** | 11 | Presence storage contract, case-insensitivity, thread-safe register/unregister atomicity |
 | **`DistributedMessageRelayTest`** | 4 | Redis Pub/Sub envelope contract: a frame published on node A is replayed into node B's broker, the origin node never echoes to itself, and unreadable or destination-less envelopes are ignored |
 | **`FriendControllerIntegrationTest`** | 3 | HTTP friend-request flow end to end |
@@ -288,7 +288,7 @@ Run all automated tests with Maven:
 | **`ChatWebSocketIntegrationTest`** | 4 | Real WebSocket/STOMP frames with 2–3 simultaneous clients: presence fan-out, duplicate-name refusal, oversized input, disconnect |
 | **`NotificationIntegrationTest`** | 13 | Message, mention, reply, friend-request, acceptance, invitation, join-request and join-accepted notifications; preference switches suppressing delivery; per-user topic routing and ownership |
 | **`WebSocketSecurityIntegrationTest`** | 3 | Anonymous and non-member subscription refusals; delivery only to authorized recipients |
-| **Total** | **245** | **100% Passing (0 failures, 0 errors, 0 skipped), 38 test classes** |
+| **Total** | **248** | **100% Passing (0 failures, 0 errors, 0 skipped), 38 test classes** |
 
 ### Running Specific Test Classes
 
