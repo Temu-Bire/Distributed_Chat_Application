@@ -37,6 +37,11 @@ A single Spring Boot process that:
 - holds live presence in memory by default, with a Redis-backed distributed
   mode (`chat.distributed.enabled`) that moves presence to shared Redis hashes
   and relays every topic frame across instances over Redis Pub/Sub,
+- gates what a reader may see about another account: a person's profile card and
+  a group's card (roster included) come from two endpoints that decide visibility
+  server-side, and one presence policy combines the live registry with each
+  account's `Show online status` choice so friends list, search, rosters and
+  cards cannot disagree,
 - optionally seeds a demo world (ten accounts, groups, messages exercising every
   feature) on startup, but only when `chat.seed.enabled=true` — the bean is not
   in the context otherwise, and a re-run against a seeded database is a no-op.
@@ -155,6 +160,22 @@ nothing about HTTP or WebSocket headers.
    `ObjectProvider<DistributedMessageRelay>` at publish time and skip the relay
    when the bean is absent, which is why single-node and cluster code paths are
    literally the same code.
+4. **Whether a person may be seen online is decided once.**
+   `PresencePolicy` combines the connection registry with the account's
+   `Show online status` setting, and is the only thing the friends list, the
+   search results, a group roster, the chat header and a profile card ask.
+   Before it, the setting existed and nothing read it, so five surfaces could
+   each have answered differently about the same person. The browser plays the
+   same rule: it never renders presence from the raw `/topic/users` list, which
+   carries accounts that hid their status — a frame there only triggers a
+   debounced re-read of the REST view.
+5. **A read that shows somebody else is one endpoint's decision.**
+   `ProfileQueryService` answers "who is this to the caller" and never returns an
+   email; `ConversationService.getGroupProfile` answers "what may this caller see
+   of this group", and whether the roster is in the answer at all. The page draws
+   both cards from those reads rather than deciding visibility client-side, which
+   is why the group page and the group card cannot drift apart, and why a plain
+   member is shown facts instead of a form the server would refuse.
 
 ---
 
@@ -388,6 +409,9 @@ thread pools against each scenario and asserts the surviving row count.
 | Sessions | Server-side Spring Security session; `changeSessionId()` on login (session-fixation defence); cookie is HttpOnly, SameSite=Lax, `Secure` behind `COOKIE_SECURE` |
 | Backend authorization | Every REST controller resolves the user from the session principal, never from the request body; services re-check membership/role before reads and writes (IDOR and privilege-escalation paths are covered by `WebSocketSecurityIntegrationTest` and the controller integration tests) |
 | WebSocket subscription auth | `/topic/conversations/{id}` subscriptions are intercepted and checked against the member table; `/topic/notifications/{userId}` is refused for any session that is not that user; `/topic/users` needs an authenticated session. Anonymous or non-member subscriptions are refused (403) |
+| Presence is a preference, enforced at the source | `PresencePolicy` returns "online" only when the account is connected **and** has not hidden its status, and every read that displays presence uses it — friends list, user search, group roster, profile card, chat header. A hidden account reads as hidden, not as offline (`OnlineVisibilityTest`) |
+| Profile cards leak nothing they are not for | `GET /api/users/{id}` returns display name, avatar, bio, join date, presence-as-permitted, the caller's friendship status and two counts. There is no email in the payload, a deactivated account is indistinguishable from a missing one, and mutual friends and shared groups are **counted, never listed** — otherwise a public profile becomes a way to enumerate somebody's social graph (`UserProfileIntegrationTest`) |
+| A group's roster belongs to its members | `GET /api/conversations/groups/{id}/profile` answers members with the roster and roles, a stranger on a public group with only the facts discovery already advertises and an empty roster, and a private group you are not in with 403 `NOT_MEMBER` — without echoing its title. Discovery itself selects `isPrivate = false`, so a private group's name and description are never advertising space (`GroupProfileIntegrationTest`) |
 | Sender cannot be spoofed | `senderId` comes from the connection's `Principal`, never from the payload |
 | Upload validation | Type decided by sniffing magic bytes against an allow-list (PNG, JPEG, GIF, WebP, PDF), never by the client's filename or `Content-Type`; per-file size cap applied after the bytes are read; stored under a generated `<prefix>_<uuid>.<ext>` name, with the resolved path re-checked against the upload root; `/uploads/**` requires a session and is served from the same directory the service writes to |
 | Attachment integrity | The reference stored on the message row is the URL the server generated; a client cannot point a message at an arbitrary path |
@@ -641,6 +665,10 @@ fragments the chat. It is now merely insufficient rather than broken.
 | 36 | The seeder writes through the services, never SQL | Registration gets BCrypt hashing, paired friendship rows, membership roles, after-commit broadcasts and the per-sender rate budget for free; raw SQL produces a database that looks right and behaves wrong |
 | 37 | One transaction around the whole seed | The guard answers "already seeded?" from a single account, so half-written rows would make every later run skip and leave the world permanently unfinished — proven by `DataSeederAtomicityTest` |
 | 38 | Repair pre-Flyway schema drift in a forward migration (V6) | Developers whose databases were created by `ddl-auto` keep their data and get a working app; telling them to delete their databases would hide the defect instead of fixing it |
+| 39 | One `PresencePolicy` decides displayable presence | `onlineVisibility` was a setting nothing read. Combining the registry lookup with the account's choice in one service is what keeps five surfaces from disagreeing about the same person, and keeps a future sixth surface from getting it wrong by accident |
+| 40 | The client treats a `/topic/users` frame as "something changed", never as the answer | The frame carries the raw connected list, accounts that hid their status included. Rendering it would leak precisely what the setting exists to withhold, so the frame only schedules a debounced re-read of the REST view, which is already the authority |
+| 41 | The group page and the group card read the same profile endpoint | Two endpoints mean two visibility rules that can drift; one read means the roster a member sees on the page is the same roster the card shows, and the server decides both. It also turned two calls (details + members) into one |
+| 42 | Cards count circles rather than listing them | A profile that listed friends or group members would make a public card into an enumeration tool for somebody else's contacts; two integers answer "how do we know each other" without exposing anyone who did not choose to be seen |
 
 ---
 
@@ -654,7 +682,7 @@ fragments the chat. It is now merely insufficient rather than broken.
 | Concurrency (`DistributedConcurrencyTest`) | Racing threads claiming a presence name, including mixed case |
 | Concurrency (`ConcurrencyRaceTest`) | Latched thread pools against each check-then-write race in §5.5 — idempotent sends, competing joins, double-accepts, reaction toggles, DM creation — asserting the surviving row counts |
 | Unit (`InMemoryPresenceStoreTest`) | The port's contract: atomicity, lookup, removal |
-| Contract (`FrontendContractTest`) | `app.js` destinations match `MessageRouter`; no HTML sink; page stays zoomable; loading vs empty states exist; the modal is an accessible dialog; the profile chip opens settings and the settings page has a phone-only way back; every destructive call is preceded by a confirmation |
+| Contract (`FrontendContractTest`) | `app.js` destinations match `MessageRouter`; no HTML sink; page stays zoomable; loading vs empty states exist; the modal is an accessible dialog; the profile chip opens settings and the settings page has a phone-only way back; a person row and a group row each open their card, and the card only shows what the endpoint dares to; every destructive call is preceded by a confirmation |
 | Integration (`ChatWebSocketIntegrationTest`) | Real sockets, 2–3 simultaneous clients: presence fan-out, duplicate-name refusal, oversized input, disconnect |
 | Integration (`WebSocketSecurityIntegrationTest`) | Unauthorized connections and non-member subscriptions refused; delivery only to authorized recipients |
 | Integration (`RateLimitIntegrationTest`) | Real HTTP: 429 + `RATE_LIMITED` + `Retry-After` on exhausted login/friend/message budgets; reads unaffected |
@@ -666,6 +694,7 @@ fragments the chat. It is now merely insufficient rather than broken.
 | Engagement (`TypingServiceTest`, `ReadReceiptTest`, `PinnedMessageTest`, `MessageSearchTest`, `MessageForwardingTest`, `MessageAttachmentTest`) | The rules behind each Phase-4 feature: throttled ephemeral frames, per-member read positions, pin permissions, member-scoped search, dual membership checks on forwards, attachment validation |
 | Groups (`GroupInviteLinkTest`, `GroupInviteLinkRestTest`) | 20 application-level link rules (entropy, expiry, use count, revoke, blocking, uniform refusal) plus 7 HTTP-surface tests for routing and status codes |
 | Notifications (`NotificationIntegrationTest`) | 13 cases over real STOMP sessions: every category reaches the right private topic, preference switches suppress it, and no other session can subscribe |
+| Profiles & presence (`UserProfileIntegrationTest`, `GroupProfileIntegrationTest`, `OnlineVisibilityTest`) | 24 cases over the two card endpoints: what the owner, a plain member, a stranger, a pending requester and a blocked user are each allowed to see; that no email ever leaves and a deactivated account reads as missing; that discovery advertises public groups only; and that hiding online status is honoured on all four surfaces that display it rather than reported as offline |
 | Distributed (`DistributedMessageRelayTest`, `CrossInstanceFanoutTest`) | The Redis envelope contract between two relay nodes (replay, self-echo suppression, malformed envelopes ignored) and, with a mocked relay, that every event type a user can cause is handed to it with the correct destination |
 
 `ChatWebSocketIntegrationTest` asserts negatively as well as positively: a
@@ -675,7 +704,7 @@ pass trivially if refusals were indistinguishable from successful joins.
 would fail a feature that persists correctly but never crosses nodes, which is
 the failure mode a distributed deployment actually exhibits.
 
-Run everything with `./mvnw.cmd test` (219 tests across 35 classes, all against a
+Run everything with `./mvnw.cmd test` (245 tests across 38 classes, all against a
 throwaway in-memory database; no external services required — the distributed
 tests mock Redis rather than needing a server, and `DataSeederTest` overrides the
 datasource URL so its ten seeded accounts cannot leak into the database the rest

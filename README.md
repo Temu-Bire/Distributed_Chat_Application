@@ -56,12 +56,15 @@ The application evolved from an initial single-process Java TCP socket and Swing
 - **Friend Requests:** Send, accept, reject, and cancel requests; incoming/outgoing lists persisted in the database.
 - **Friends Directory:** Friends, request counts, and message shortcuts all load from `/api/friends` and `/api/users/search` — never hardcoded.
 - **Friendship Status in Search:** Every search result carries its `NONE / PENDING_OUTGOING / PENDING_INGOING / FRIENDS` state so the UI can show the right action.
+- **Public Profile Cards:** Tap any person — a friend row, a pending request, a search result, or a name in a group roster — to read their display name, avatar, bio, join date, whether they are online, your relationship, and how many friends and groups you have in common. The card is built from `GET /api/users/{id}`, which never carries an email address, and a deactivated account reads as not found.
+- **Online Visibility Is Enforced, Not Decorative:** The `Show online status` switch is honoured on every surface that displays presence — friends list, search results, group roster, chat header, and the profile card, which says "Online status hidden" instead of reporting a hidden-status user as offline.
 
 ### 💬 Persistent Conversations & Group Chats
 - **Direct 1-on-1 Chats:** Start private chats with any registered user. Idempotent creation prevents duplicates and automatically unarchives inactive chats.
 - **Multi-Member Group Chats:** Create groups with custom titles, descriptions, and avatars.
 - **Public / Private Groups:** Privacy is stored per group; only public groups appear in discovery, while private groups are reachable by invitation or invite link.
 - **Group Discovery & Join Requests:** Browse public groups, request to join, and let owners or moderators accept, reject, or withdraw the request.
+- **Group Card, With Its Roster:** Any group you can name opens a card — picture, visibility, description, size, the date it was created, and your own role. Members also get the roster with each person's role, and every name in it opens that person's profile. A stranger on a public group gets exactly the facts discovery already advertises and no names, and a private group is refused without echoing its title. The group page reads the same endpoint, so one server-side decision is what limits both.
 - **Group Invitations:** Owners and moderators invite friends to groups; invitees accept, reject, or see cancellations.
 - **Invitation Links:** Owners and moderators create revoke-able links (128-bit random token). The token travels only in a POST body, preview shows the group before joining, and joining re-checks blocking, existing membership, and the link's own expiry/use limit — including for private groups.
 - **Role-Based Group Administration:** `OWNER` / `MODERATOR` / `MEMBER`. Moderators and owners edit the group, add or remove members, review join requests, invite, block and pin; only the owner changes roles, and ownership moves by the owner leaving.
@@ -265,14 +268,17 @@ Run all automated tests with Maven:
 | **`ReadReceiptTest`** | 5 | Last-read position, `readByCount` aggregation, `READ_UPDATE` broadcast, non-member refusal, unread count |
 | **`TypingServiceTest`** | 4 | Ephemeral `TYPING` broadcast, non-member refusal, 2 s throttle per member per conversation, independent start/stop throttles |
 | **`UploadServiceTest`** | 6 | Storage path safety, generated names, extension sniffing from magic bytes, oversized rejection, disallowed type rejection, delete of an orphaned file |
-| **`FrontendContractTest`** | 6 | `app.js` pins exactly the server's STOMP destinations, zero `innerHTML` sinks, page stays zoomable and shows loading vs empty states, the modal is an accessible dialog, settings can be opened from the profile chip and left again on a phone, and every destructive action confirms before it calls |
+| **`FrontendContractTest`** | 8 | `app.js` pins exactly the server's STOMP destinations, zero `innerHTML` sinks, page stays zoomable and shows loading vs empty states, the modal is an accessible dialog, settings can be opened from the profile chip and left again on a phone, every destructive action confirms before it calls, every person row opens a profile card, and both group card and group page read the one endpoint that decides the roster |
 | **`LandingPageIntegrationTest`** | 4 | `/` serves the landing page, `/app` serves the client, every button resolves to a real route, marketing security claims match enforcement |
 | **`InMemoryPresenceStoreTest`** | 11 | Presence storage contract, case-insensitivity, thread-safe register/unregister atomicity |
 | **`DistributedMessageRelayTest`** | 4 | Redis Pub/Sub envelope contract: a frame published on node A is replayed into node B's broker, the origin node never echoes to itself, and unreadable or destination-less envelopes are ignored |
 | **`FriendControllerIntegrationTest`** | 3 | HTTP friend-request flow end to end |
 | **`FullE2EChatJourneyTest`** | 1 | Register → friend → direct chat → message journey over REST |
 | **`GroupInviteLinkRestTest`** | 7 | Invite-link REST surface: create, list, revoke, preview, join, and the failure statuses over HTTP |
+| **`GroupProfileIntegrationTest`** | 10 | The group card over HTTP: a member reads the roster with roles, the owner's card says so, a stranger on a public group gets the facts and no names, a private group is refused without echoing its title, pending and blocked states show themselves, discovery advertises public groups only, a direct chat has no card, an unknown id is 404, anonymous is rejected |
 | **`HealthEndpointIntegrationTest`** | 2 | HTTP GET `/api/health` verifying health status reporting |
+| **`OnlineVisibilityTest`** | 5 | `Show online status` checked across the four surfaces that display presence — friends row, search result, group roster, profile card: sharing looks online everywhere, hiding turns all four off, a hidden status reads as private rather than offline, sharing again restores it, and an account that is simply away is offline but still sharing |
+| **`UserProfileIntegrationTest`** | 9 | `GET /api/users/{id}` over HTTP: handle, bio and joined date reach the caller, the response never carries the target's email, friendship state travels with the card, presence is reported only while the target shares it, shared circles are counted rather than listed, a deactivated account is indistinguishable from a missing one, your own card reports `SELF` with no circles, a non-UUID id is rejected before it reaches the database, and an anonymous caller reads nothing |
 | **`UploadServingTest`** | 3 | The app boots on a non-default `UPLOAD_DIR` and a stored upload is still served back over `/uploads/**`; anonymous and traversal reads are refused |
 | **`DataSeederTest`** | 6 | The opt-in seed produces a usable world on a private database: all 10 accounts log in, friendships pair and requests stay pending, the groups carry a moderator/join request/invite/block, the threads hold a pin, a forward, a reply, an edit, a soft delete and read receipts, preferences differ per account, and re-running is a no-op |
 | **`DataSeederAtomicityTest`** | 1 | A seed that dies part-way through (forced with a username the seeder will collide with) leaves **no** rows behind, so the "already seeded" guard can never mistake a half-written database for a finished one |
@@ -282,7 +288,7 @@ Run all automated tests with Maven:
 | **`ChatWebSocketIntegrationTest`** | 4 | Real WebSocket/STOMP frames with 2–3 simultaneous clients: presence fan-out, duplicate-name refusal, oversized input, disconnect |
 | **`NotificationIntegrationTest`** | 13 | Message, mention, reply, friend-request, acceptance, invitation, join-request and join-accepted notifications; preference switches suppressing delivery; per-user topic routing and ownership |
 | **`WebSocketSecurityIntegrationTest`** | 3 | Anonymous and non-member subscription refusals; delivery only to authorized recipients |
-| **Total** | **219** | **100% Passing (0 failures, 0 errors, 0 skipped)** |
+| **Total** | **245** | **100% Passing (0 failures, 0 errors, 0 skipped), 38 test classes** |
 
 ### Running Specific Test Classes
 
@@ -384,6 +390,7 @@ To verify that two users connected to **two different application instances** ca
 | Method | Path | Description | Access |
 |---|---|---|---|
 | `GET` | `/api/users/search?query=...` | Search users by name (excludes self, includes friendship status) | Authenticated |
+| `GET` | `/api/users/{userId}` | One person's profile card: display name, avatar, bio, join date, online flag as their settings allow, your friendship status, mutual-friend and shared-group counts. Never an email; a deactivated account is reported as not found | Authenticated |
 | `GET` | `/api/users/profile` | Current profile | Authenticated |
 | `PUT` | `/api/users/profile` | Update profile bio and display name | Authenticated |
 | `PUT` | `/api/users/password` | Change user password | Authenticated |
@@ -419,6 +426,7 @@ To verify that two users connected to **two different application instances** ca
 | `PUT` | `/api/conversations/{id}/read` | Mark read; records position and broadcasts `READ_UPDATE` | Member |
 | `PUT` | `/api/conversations/groups/{id}/members/{userId}/role?role=` | Change a member's role | Owner only |
 | `GET` | `/api/conversations/groups/discover` | Discover joinable public groups | Authenticated |
+| `GET` | `/api/conversations/groups/{id}/profile` | Group card: title, description, avatar, visibility, size, created date, caller's role and membership status, **plus the member roster for members only**. A stranger on a public group gets the advertised facts and an empty roster; a private group you are not in is refused (403 `NOT_MEMBER`) | Authenticated |
 | `POST` | `/api/conversations/groups/{id}/join` | Join an open public group directly | Authenticated |
 | `POST` | `/api/conversations/groups/{id}/join-requests` | Request to join a group | Authenticated |
 | `GET` | `/api/conversations/groups/{id}/join-requests` | Pending requests for review | Owner / Moderator |
