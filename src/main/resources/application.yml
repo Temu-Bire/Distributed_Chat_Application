@@ -14,8 +14,10 @@ spring:
   jpa:
     hibernate:
       # Flyway owns the schema; Hibernate only checks that its mappings match
-      # what the migrations created. A drift now fails fast at startup instead
-      # of silently mutating tables (or blowing up on the first query).
+      # what the migrations created. A missing or extra table/column now fails
+      # fast at startup instead of silently diverging (or blowing up on the first
+      # query). Validate compares column types, not a native ENUM's permitted
+      # value list - V6 repairs the columns Hibernate created before Flyway did.
       ddl-auto: validate
     open-in-view: false
   flyway:
