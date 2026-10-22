@@ -331,8 +331,8 @@
             wrap.appendChild(remove);
             return wrap;
         };
-        fillPeopleList($('friends-list'), state.friends, actions);
-        fillPeopleList($('requests-friends-list'), state.friends, actions);
+        fillPeopleList($('friends-list'), state.friends, actions, (friend) => friend.id);
+        fillPeopleList($('requests-friends-list'), state.friends, actions, (friend) => friend.id);
     }
 
     async function removeFriend(friend) {
@@ -351,7 +351,7 @@
         }
     }
 
-    function fillPeopleList(list, people, actionFactory) {
+    function fillPeopleList(list, people, actionFactory, profileIdOf) {
         while (list.firstChild) list.removeChild(list.firstChild);
         if (!people.length) {
             list.appendChild(el('div', 'empty', 'Nothing here yet'));
@@ -367,14 +367,16 @@
             if (person.message) {
                 mid.appendChild(el('span', 'request-message', '"' + person.message + '"'));
             }
-            row.appendChild(avatar);
-            row.appendChild(mid);
+            attachProfileOpen(row, avatar, mid, profileIdOf(person),
+                person.displayName || person.senderDisplayName || person.receiverDisplayName || 'this user');
             if (actionFactory) row.appendChild(actionFactory(person));
             list.appendChild(row);
         });
     }
 
     function renderRequests() {
+        // A request row's own id is the request's, so the profile is the person
+        // on the other side of it.
         fillPeopleList($('incoming-requests-list'), state.incoming, (req) => {
             const wrap = el('div', 'row-gap');
             wrap.style.marginTop = '0';
@@ -387,7 +389,7 @@
             wrap.appendChild(accept);
             wrap.appendChild(reject);
             return wrap;
-        });
+        }, (req) => req.senderId);
         fillPeopleList($('outgoing-requests-list'), state.outgoing.map((req) => ({
             ...req,
             displayName: req.receiverDisplayName,
@@ -398,7 +400,7 @@
             cancel.type = 'button';
             cancel.addEventListener('click', () => actOnRequest(req.id, 'cancel'));
             return cancel;
-        });
+        }, (req) => req.receiverId);
         const badge = $('requests-badge');
         const totalRequests = state.incoming.length + state.groupInvitations.length;
         badge.hidden = totalRequests === 0;
@@ -890,8 +892,8 @@
         $('app-shell').classList.remove('show-page');
         setAvatar($('chat-avatar'), convTitle(conv), conv.avatarUrl);
         $('chat-title').textContent = convTitle(conv);
-        $('chat-subtitle').textContent = isGroup(conv) ? (conv.memberCount ? conv.memberCount + ' members' : 'Group chat') : 'Private chat';
-        $('chat-online-dot').hidden = isGroup(conv);
+        renderChatPresence(null);
+        refreshChatPresence();
         renderConversations();
         subscribeConversation(id);
         clearReply();
@@ -1149,6 +1151,9 @@
 
     function openModal(title) {
         modalReturnFocus = document.activeElement;
+        // Whatever card was open is gone now, so a late presence refresh must
+        // not paint it over this modal.
+        openProfileId = null;
         $('modal-title').textContent = title;
         const body = $('modal-body');
         const actions = $('modal-actions');
@@ -1400,8 +1405,7 @@
                 const mid = el('div');
                 mid.appendChild(el('strong', '', member.displayName));
                 mid.appendChild(el('span', 'muted', member.role + (member.online ? ' · Online' : '')));
-                row.appendChild(avatar);
-                row.appendChild(mid);
+                attachProfileOpen(row, avatar, mid, member.userId, member.displayName);
                 const isSelf = member.userId === state.user.id;
                 if (!isSelf && isAdmin) {
                     const actions = el('div', 'row-gap');
@@ -2255,7 +2259,7 @@
         state.stomp = client;
         client.connect(() => {
             cancelReconnect();
-            client.subscribe(DEST.USERS, () => {});
+            client.subscribe(DEST.USERS, () => schedulePresenceRefresh());
             client.subscribe(DEST.ERROR_BOX, (err) => {
                 if (err && err.message) toast(err.message);
             });
@@ -2351,8 +2355,10 @@
             conversationId: state.currentConversation && state.currentConversation.id
         }));
         $('chat-info-btn').addEventListener('click', () => {
-            if (state.currentConversation && isGroup(state.currentConversation)) openGroupManage();
-            else toast('Private conversation');
+            const conv = state.currentConversation;
+            if (!conv) return;
+            if (isGroup(conv)) openGroupManage();
+            else openUserProfile(conv.otherUserId);
         });
         $('new-chat-btn').addEventListener('click', openNewPrivateModal);
         $('notifications-btn').addEventListener('click', openNotificationsModal);
@@ -2518,8 +2524,7 @@
                 const mid = el('div');
                 mid.appendChild(el('strong', '', person.displayName));
                 mid.appendChild(el('span', 'muted', '@' + person.username + (person.online ? ' · Online' : '')));
-                row.appendChild(avatar);
-                row.appendChild(mid);
+                attachProfileOpen(row, avatar, mid, person.id, person.displayName);
                 row.appendChild(friendActionButton(person));
                 list.appendChild(row);
             });
@@ -2595,6 +2600,228 @@
         cancel.type = 'button';
         cancel.addEventListener('click', closeModal);
         actions.appendChild(cancel);
+    }
+
+    let profileCardToken = 0;
+    let openProfileId = null;
+    let presenceTimer = null;
+
+    /**
+     * The profile card: what one account may know about another, read from
+     * GET /api/users/{id}. Rows open it from the friends list, the people
+     * search, a pending request and the group roster, and a DM's info button
+     * opens it for whoever is on the other end of the chat.
+     */
+    function openUserProfile(userId) {
+        if (!userId) return;
+        const card = openModal('Profile');
+        openProfileId = userId;
+        card.body.appendChild(el('div', 'empty', 'Loading profile\u2026'));
+        paintProfileCard(card, userId, ++profileCardToken);
+    }
+
+    /**
+     * The token is what makes a late response safe: opening a different card
+     * while this read is in flight must not let the older one paint over it.
+     */
+    async function paintProfileCard(card, userId, token) {
+        let profile;
+        try {
+            profile = await request('/users/' + userId);
+        } catch (err) {
+            if (token === profileCardToken) {
+                closeModal();
+                toast(err.message);
+            }
+            return;
+        }
+        if (token !== profileCardToken || $('modal').hidden) return;
+        $('modal-title').textContent = profile.displayName || profile.username;
+        renderProfileCard(card, profile);
+    }
+
+    /** Re-read the open card in place: presence changed, the user did not. */
+    function refreshOpenProfile() {
+        if (!openProfileId || $('modal').hidden) return;
+        paintProfileCard({ body: $('modal-body'), actions: $('modal-actions') },
+            openProfileId, ++profileCardToken);
+    }
+
+    function renderProfileCard(card, profile) {
+        while (card.body.firstChild) card.body.removeChild(card.body.firstChild);
+        while (card.actions.firstChild) card.actions.removeChild(card.actions.firstChild);
+
+        const hero = el('div', 'profile-hero');
+        const frame = el('div', 'avatar-wrap');
+        const avatar = el('div', 'avatar avatar--xl');
+        setAvatar(avatar, profile.displayName || profile.username, profile.avatarUrl);
+        frame.appendChild(avatar);
+        if (profile.online) frame.appendChild(el('em', 'presence'));
+        const who = el('div');
+        who.appendChild(el('strong', '', profile.displayName || profile.username));
+        who.appendChild(el('span', 'muted', '@' + profile.username));
+        who.appendChild(el('span', 'profile-status', presenceLabel(profile)));
+        hero.appendChild(frame);
+        hero.appendChild(who);
+        card.body.appendChild(hero);
+
+        if (profile.bio) card.body.appendChild(el('p', 'profile-bio', profile.bio));
+
+        const self = profile.friendshipStatus === 'SELF';
+        const facts = el('dl', 'profile-facts');
+        addProfileFact(facts, 'Joined', joinedLabel(profile.joinedAt));
+        if (!self) {
+            addProfileFact(facts, 'Relationship', friendshipLabel(profile.friendshipStatus));
+            addProfileFact(facts, 'Mutual friends', profile.mutualFriends ? String(profile.mutualFriends) : '');
+            addProfileFact(facts, 'Groups in common', profile.sharedGroups ? String(profile.sharedGroups) : '');
+        }
+        card.body.appendChild(facts);
+
+        if (self) {
+            card.actions.appendChild(modalButton('btn btn-primary', 'Edit your profile', () => {
+                closeModal();
+                openView('settings');
+            }));
+            return;
+        }
+
+        card.actions.appendChild(modalButton('btn btn-primary', 'Message', () => {
+            closeModal();
+            startDirect(profile.id);
+        }));
+
+        if (profile.friendshipStatus === 'FRIENDS') {
+            card.actions.appendChild(modalButton('btn btn-ghost', 'Unfriend', async () => {
+                const ok = await confirmAction({
+                    title: 'Remove ' + (profile.displayName || profile.username) + '?',
+                    message: 'You both leave the other list of friends. Shared conversations stay where they are.',
+                    confirm: 'Remove'
+                });
+                if (ok) {
+                    try {
+                        await request('/friends/' + profile.id, { method: 'DELETE' });
+                        toast('Friend removed');
+                        await loadFriends();
+                    } catch (err) {
+                        toast(err.message);
+                    }
+                }
+                // The dialog took this card's place either way, so it comes back.
+                openUserProfile(profile.id);
+            }));
+        } else if (profile.friendshipStatus === 'NONE') {
+            card.actions.appendChild(modalButton('btn btn-outline', 'Add friend',
+                () => openFriendRequestModal(profile)));
+        } else if (profile.friendshipStatus === 'PENDING_RECEIVED') {
+            card.actions.appendChild(modalButton('btn btn-outline', 'Accept request', async () => {
+                try {
+                    await request('/friends/requests', {
+                        method: 'POST',
+                        body: JSON.stringify({ userId: profile.id, username: profile.username })
+                    });
+                    toast('Friend request accepted');
+                    await loadFriends();
+                    refreshOpenProfile();
+                } catch (err) {
+                    toast(err.message);
+                }
+            }));
+        } else {
+            card.actions.appendChild(el('span', 'pill pill-mute', 'Request sent'));
+        }
+    }
+
+    function modalButton(className, label, onClick) {
+        const button = el('button', className, label);
+        button.type = 'button';
+        button.addEventListener('click', onClick);
+        return button;
+    }
+
+    function addProfileFact(list, label, value) {
+        if (!value) return;
+        list.appendChild(el('dt', '', label));
+        list.appendChild(el('dd', '', value));
+    }
+
+    function presenceLabel(profile) {
+        if (profile.online) return 'Online now';
+        return profile.shareOnlineStatus ? 'Offline' : 'Online status hidden';
+    }
+
+    function friendshipLabel(status) {
+        if (status === 'FRIENDS') return 'Friends';
+        if (status === 'PENDING_SENT') return 'Request you sent';
+        if (status === 'PENDING_RECEIVED') return 'Waiting on your answer';
+        return 'Not connected yet';
+    }
+
+    function joinedLabel(value) {
+        if (!value) return '';
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return '';
+        return date.toLocaleDateString([], { year: 'numeric', month: 'long', day: 'numeric' });
+    }
+
+    /**
+     * Wraps a row's avatar and name in the control that opens that person's
+     * profile. The row itself stays a div: the action pills beside it are
+     * buttons, and a button may not contain one.
+     */
+    function attachProfileOpen(row, avatar, mid, userId, label) {
+        const opener = el('button', 'person-open');
+        opener.type = 'button';
+        opener.setAttribute('aria-label', 'View the profile of ' + (label || 'this user'));
+        opener.appendChild(avatar);
+        opener.appendChild(mid);
+        opener.addEventListener('click', () => openUserProfile(userId));
+        row.appendChild(opener);
+    }
+
+    /**
+     * A presence frame names who joined and left, but the list it carries is the
+     * raw registry - accounts that hid their status are in it too. So the frame
+     * is only a "something changed" signal and the REST reads stay the authority
+     * on who may be seen online. The delay is what keeps a busy server, where
+     * several people connect at once, from refetching per frame.
+     */
+    function schedulePresenceRefresh() {
+        if (presenceTimer) return;
+        presenceTimer = setTimeout(() => {
+            presenceTimer = null;
+            loadFriends().catch(() => {});
+            if (state.view === 'friends') searchUsers();
+            refreshOpenProfile();
+            refreshChatPresence();
+        }, 1200);
+    }
+
+    /** The dot and the line under a chat's title. Groups have no peer to be online as. */
+    function renderChatPresence(peer) {
+        const conv = state.currentConversation;
+        if (!conv) return;
+        const dot = $('chat-online-dot');
+        dot.hidden = true;
+        if (isGroup(conv)) {
+            $('chat-subtitle').textContent = conv.memberCount ? conv.memberCount + ' members' : 'Group chat';
+            return;
+        }
+        $('chat-subtitle').textContent = 'Private chat';
+        if (!peer || !peer.shareOnlineStatus) return;
+        $('chat-subtitle').textContent = peer.online ? 'Online' : 'Offline';
+        dot.hidden = !peer.online;
+    }
+
+    async function refreshChatPresence() {
+        const conv = state.currentConversation;
+        if (!conv || isGroup(conv) || !conv.otherUserId) return;
+        try {
+            const peer = await request('/users/' + conv.otherUserId);
+            if (state.currentConversation !== conv) return;
+            renderChatPresence(peer);
+        } catch (err) {
+            // The header keeps its last known state; the thread is unaffected.
+        }
     }
 
     function renderAttachment(attachment) {

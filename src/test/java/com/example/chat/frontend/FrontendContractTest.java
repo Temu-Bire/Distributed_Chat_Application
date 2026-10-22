@@ -122,6 +122,39 @@ class FrontendContractTest {
     }
 
     @Test
+    @DisplayName("a person row opens the profile card, and the card only shows what the endpoint dares to")
+    void profileCardsAreWiredToThePeopleRows() throws IOException {
+        String js = Files.readString(CHAT_JS, StandardCharsets.UTF_8);
+
+        assertThat(js)
+                .as("the card reads GET /api/users/{id}, the payload built without an email address")
+                .contains("request('/users/' + userId)");
+        assertThat(js)
+                .as("the ways in: the friends and request rows, the people search, the group roster, "
+                        + "and the info button of a private chat")
+                .contains("attachProfileOpen(row, avatar, mid, profileIdOf(person),")
+                .contains("attachProfileOpen(row, avatar, mid, person.id, person.displayName);")
+                .contains("attachProfileOpen(row, avatar, mid, member.userId, member.displayName);")
+                .contains("else openUserProfile(conv.otherUserId);");
+        assertThat(js)
+                .as("a request row's own id belongs to the request, so the card has to come from the "
+                        + "person on the other side of it")
+                .contains("}, (req) => req.senderId);")
+                .contains("}, (req) => req.receiverId);");
+        assertThat(js)
+                .as("someone who hid their status is shown as hidden, not reported as offline")
+                .contains("profile.shareOnlineStatus ? 'Offline' : 'Online status hidden'");
+        assertThat(js)
+                .as("the header dot used to be shown for any group of one, which proved nothing")
+                .doesNotContain("$('chat-online-dot').hidden = isGroup(conv);");
+        assertThat(js)
+                .as("the presence topic carries the raw registry, connected accounts that hid their "
+                        + "status included, so a frame may only trigger a re-read of the REST view")
+                .contains("client.subscribe(DEST.USERS, () => schedulePresenceRefresh());")
+                .doesNotContain("client.subscribe(DEST.USERS, () => {});");
+    }
+
+    @Test
     @DisplayName("destructive client actions ask for confirmation before they send the request")
     void destructiveActionsConfirmFirst() throws IOException {
         String js = Files.readString(CHAT_JS, StandardCharsets.UTF_8);
@@ -147,6 +180,7 @@ class FrontendContractTest {
         Map<String, String> calls = new LinkedHashMap<>();
         calls.put("await request('/messages/' + msg.id, { method: 'DELETE' });", "deleting a message");
         calls.put("await request('/friends/' + friend.id, { method: 'DELETE' });", "removing a friend");
+        calls.put("await request('/friends/' + profile.id, { method: 'DELETE' });", "unfriending from a profile card");
         calls.put("await request('/conversations/' + conv.id + '/members/' + member.userId, { method: 'DELETE' });", "removing a member");
         calls.put("await request('/conversations/groups/' + conv.id + '/blocks', {", "blocking a member");
         calls.put("await request('/conversations/groups/' + groupId + '/invite-links/' + link.id, { method: 'DELETE' });", "revoking an invite link");
