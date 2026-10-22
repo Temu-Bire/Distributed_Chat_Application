@@ -3,21 +3,29 @@ package com.example.chat.frontend;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.test.context.support.WithMockUser;
+import org.springframework.test.web.servlet.MockMvc;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * The landing page is the front door: it must answer at "/", point its
- * buttons at routes that actually exist, and never be locked behind
- * authentication. A dead "Get Started" link is a broken product claim, so it
- * is checked here rather than in a manual pass.
+ * The landing page is the front door: it must answer at "/" for people who
+ * have not signed in, keep its buttons pointed at routes that actually exist,
+ * and stay out of the way of anyone who already has a session. A dead "Get
+ * Started" link is a broken product claim, so it is checked here rather than in
+ * a manual pass.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@AutoConfigureMockMvc
 class LandingPageIntegrationTest {
 
     @LocalServerPort
@@ -25,6 +33,9 @@ class LandingPageIntegrationTest {
 
     @Autowired
     private TestRestTemplate restTemplate;
+
+    @Autowired
+    private MockMvc mockMvc;
 
     @Test
     @DisplayName("the root serves the public landing page to anonymous visitors")
@@ -37,6 +48,15 @@ class LandingPageIntegrationTest {
         assertThat(body).contains("Connect. Chat.");
         assertThat(body).contains("/css/landing.css");
         assertThat(body).doesNotContain("app-shell");
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("a signed-in visitor is sent to the app, not shown the landing page")
+    void signedInRootRedirectsToApp() throws Exception {
+        mockMvc.perform(get("/"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/app"));
     }
 
     @Test

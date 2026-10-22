@@ -51,13 +51,13 @@ public class WebConfig implements WebMvcConfigurer {
     }
 
     /**
-     * "/" is the public landing page; the application itself lives at
-     * "/app". /index.html keeps serving the app for existing bookmarks and the
-     * automated checks that reference it directly.
+     * The application itself lives at "/app". /index.html keeps serving the app
+     * for existing bookmarks and the automated checks that reference it directly.
+     * "/" is not mapped here because {@code PageController} has to look at the
+     * session before it can choose between the landing page and the app.
      */
     @Override
     public void addViewControllers(ViewControllerRegistry registry) {
-        registry.addViewController("/").setViewName("forward:/landing.html");
         registry.addViewController("/app").setViewName("forward:/index.html");
     }
 }
