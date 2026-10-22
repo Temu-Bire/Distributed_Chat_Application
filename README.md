@@ -14,6 +14,7 @@ The application evolved from an initial single-process Java TCP socket and Swing
 4. [How to Run the Application](#how-to-run-the-application)
    - [Mode 1: Quick Start (Single Node Development)](#mode-1-quick-start-single-node-development)
    - [Mode 2: Local Development with PostgreSQL and Redis](#mode-2-local-development-with-postgresql-and-redis)
+   - [Seeding demo data (opt-in, development only)](#seeding-demo-data-opt-in-development-only)
 5. [How to Test the Application Fully](#how-to-test-the-application-fully)
    - [Automated Test Suite](#automated-test-suite)
    - [Running Specific Test Classes](#running-specific-test-classes)
@@ -195,6 +196,43 @@ $env:CHAT_DISTRIBUTED_ENABLED = "true"
 
 ---
 
+### Seeding demo data (opt-in, development only)
+
+The app ships **empty**. Nothing is inserted unless you ask for it: the seeder bean
+only exists in the context when `chat.seed.enabled=true`, which is not set in
+`application.yml`, in `.env.example`, or by any test except its own.
+
+```powershell
+.\mvnw.cmd spring-boot:run "-Dspring-boot.run.arguments=--chat.seed.enabled=true"
+```
+
+One startup inserts a small connected world and then never runs again on that
+database:
+
+| | |
+| --- | --- |
+| **Accounts** | 10 — `mira`, `danny`, `lena`, `tomas`, `sara`, `owen`, `ravi`, `yuki`, `nadia`, `phil` |
+| **Login** | `<username>@seed.local`, shared password `seedpass123` (`DataSeeder.PASSWORD`) |
+| **Social graph** | 7 accepted friendships, 2 still-pending requests so the inbox is not empty |
+| **Groups** | `Design Standup` (public, one moderator, a pending join request, a live invite link), `Weekend Climbing` (private, a pending invitation), `Build Failures` (public, one blocked member) |
+| **Direct chats** | 4 |
+| **Messages** | replies, 👍/🎉/📌/👀 reactions, a pin, an edit, a soft delete, a cross-conversation forward, and partial read state so unread badges differ per person |
+| **Preferences** | `yuki` has notifications off, `lena` runs the dark theme, `ravi` mutes mentions |
+
+Every row arrives through the real services — BCrypt hashing, paired friendship
+rows, membership roles, after-commit broadcasts, the per-sender rate budget — not
+raw SQL, so seeded data behaves exactly like browser-created data. The whole world
+is **one transaction**: if any step fails, nothing is left behind, which matters
+because the "already seeded" guard looks for a single account and would otherwise
+mistake a half-written database for a completed one. Re-running the flag against a
+seeded database logs `Seed skipped` and changes nothing.
+
+> **Do not enable this in production.** These are development fixtures on a
+> throwaway database with one shared password and a `.seed.local` domain that does
+> not resolve. Turn the flag off for any deployment that has real users.
+
+---
+
 ## How to Test the Application Fully
 
 ### Automated Test Suite
@@ -236,13 +274,15 @@ Run all automated tests with Maven:
 | **`GroupInviteLinkRestTest`** | 7 | Invite-link REST surface: create, list, revoke, preview, join, and the failure statuses over HTTP |
 | **`HealthEndpointIntegrationTest`** | 2 | HTTP GET `/api/health` verifying health status reporting |
 | **`UploadServingTest`** | 3 | The app boots on a non-default `UPLOAD_DIR` and a stored upload is still served back over `/uploads/**`; anonymous and traversal reads are refused |
+| **`DataSeederTest`** | 6 | The opt-in seed produces a usable world on a private database: all 10 accounts log in, friendships pair and requests stay pending, the groups carry a moderator/join request/invite/block, the threads hold a pin, a forward, a reply, an edit, a soft delete and read receipts, preferences differ per account, and re-running is a no-op |
+| **`DataSeederAtomicityTest`** | 1 | A seed that dies part-way through (forced with a username the seeder will collide with) leaves **no** rows behind, so the "already seeded" guard can never mistake a half-written database for a finished one |
 | **`RateLimiterTest`** | 7 | Fixed-window budgets, rollover, `Retry-After`, key isolation, disabled-mode, 16-thread shared-budget atomicity |
 | **`RateLimitIntegrationTest`** | 3 | Real HTTP: 429 + `RATE_LIMITED` + `Retry-After` on exhausted login/friend-request/message budgets; reads unaffected |
 | **`SessionHardeningIntegrationTest`** | 3 | Cookie HttpOnly/SameSite=Lax, session id rotation on login (fixation defence), CSP / X-Frame-Options / nosniff headers |
 | **`ChatWebSocketIntegrationTest`** | 4 | Real WebSocket/STOMP frames with 2–3 simultaneous clients: presence fan-out, duplicate-name refusal, oversized input, disconnect |
 | **`NotificationIntegrationTest`** | 13 | Message, mention, reply, friend-request, acceptance, invitation, join-request and join-accepted notifications; preference switches suppressing delivery; per-user topic routing and ownership |
 | **`WebSocketSecurityIntegrationTest`** | 3 | Anonymous and non-member subscription refusals; delivery only to authorized recipients |
-| **Total** | **211** | **100% Passing (0 failures, 0 errors, 0 skipped)** |
+| **Total** | **218** | **100% Passing (0 failures, 0 errors, 0 skipped)** |
 
 ### Running Specific Test Classes
 
@@ -460,10 +500,11 @@ Configure via environment variables or in `src/main/resources/application.yml`:
 | `SPRING_DATASOURCE_URL` | `jdbc:h2:file:./data/chatsphere` (PostgreSQL mode) | JDBC connection URL; set to `jdbc:postgresql://...` for a managed database |
 | `SPRING_DATASOURCE_USERNAME` | `sa` | Database username |
 | `SPRING_DATASOURCE_PASSWORD` | *(empty)* | Database password |
-| `SPRING_FLYWAY_ENABLED` | `true` | Flyway is the sole schema owner (`ddl-auto: validate` — entity/migration drift fails startup) |
+| `SPRING_FLYWAY_ENABLED` | `true` | Flyway is the sole schema owner (`ddl-auto: validate` — structural drift fails startup; [architecture §6](docs/architecture.md#6-security--what-the-code-does-and-what-it-does-not) covers the one class it cannot see) |
 | `SPRING_REDIS_HOST` | `localhost` | Redis server hostname |
 | `SPRING_REDIS_PORT` | `6379` | Redis server port |
 | `CHAT_DISTRIBUTED_ENABLED` | `false` | Enable Redis cluster presence & Pub/Sub relay |
+| `CHAT_SEED_ENABLED` | unset (`false`) | Insert the demo world on startup (see [Seeding demo data](#seeding-demo-data-opt-in-development-only)). Absent ⇒ the seeder bean is not in the context |
 | `CHAT_RATE_LIMIT_ENABLED` | `true` | Master switch for the fixed-window rate limiter |
 | `RATE_LIMIT_LOGIN` | `10` | Login attempts per minute per IP |
 | `RATE_LIMIT_REGISTER` | `5` | Registrations per minute per IP |
@@ -498,10 +539,11 @@ Configure via environment variables or in `src/main/resources/application.yml`:
     │   │   ├── exception/              # Global error handling and ChatException
     │   │   ├── infrastructure/         # Repositories; InMemory + Redis presence stores; Redis Pub/Sub relay
     │   │   ├── security/               # SecurityConfig (sessions, CSP), RateLimiter + filter, StompSubscriptionGuard
+    │   │   ├── seed/                   # DataSeeder: opt-in demo world, absent unless chat.seed.enabled=true
     │   │   └── websocket/              # STOMP controllers and connection event listeners
     │   └── resources/
     │       ├── application.yml         # Application configuration
-    │       ├── db/migration/           # Flyway SQL schema migrations V1–V5 (sole schema owner)
+    │       ├── db/migration/           # Flyway SQL schema migrations V1–V6 (sole schema owner)
     │       └── static/                 # ChatSphere vanilla web frontend
     │           ├── landing.html        # Marketing landing page served at /
     │           ├── index.html          # Chat layout and modals (served at /app)

@@ -35,8 +35,11 @@ A single Spring Boot process that:
   silence watchdog, capped exponential reconnect, REST catch-up for everything
   missed, and a REST fallback for composer sends,
 - holds live presence in memory by default, with a Redis-backed distributed
-  mode (`chat.distributed.enabled`) that moves presence to a shared TTL store and
-  relays every topic frame across instances over Redis Pub/Sub.
+  mode (`chat.distributed.enabled`) that moves presence to shared Redis hashes
+  and relays every topic frame across instances over Redis Pub/Sub,
+- optionally seeds a demo world (ten accounts, groups, messages exercising every
+  feature) on startup, but only when `chat.seed.enabled=true` — the bean is not
+  in the context otherwise, and a re-run against a seeded database is a no-op.
 
 ---
 
@@ -457,6 +460,17 @@ changed, which needs no configuration change.
   hashes with no TTL and there is no sweep job, so a killed instance's users
   remain online and keep their names until that instance restarts. Normal
   disconnects (and silent peers noticed by the heartbeat watchdog) do clean up.
+- **Databases older than Flyway ownership still differ from the migrations.**
+  Before Flyway became the sole schema owner, Hibernate's `ddl-auto` created these
+  tables, and it mapped `@Enumerated(EnumType.STRING)` to a native H2 `ENUM` whose
+  permitted value list froze at creation time. Flyway baselines at V1 on a
+  non-empty schema and never replays it, and `ddl-auto: validate` compares the
+  column *type*, not the value list — so promoting a moderator failed with
+  `Value not permitted for column ('MEMBER', 'OWNER'): MODERATOR` until V6 widened
+  those five columns. The same Hibernate-created tables also lack the
+  `ON DELETE CASCADE` the migrations declare, so a manual `delete from users`
+  leaves dangling child rows; the application never hard-deletes users, which is
+  why nothing has caught it. A database created from V1 onwards has neither.
 - **Transport security (TLS) is external.** Run behind a TLS-terminating proxy
   or enable Tomcat's HTTPS connector, and set `COOKIE_SECURE=true`.
 
@@ -540,7 +554,7 @@ for idempotent writes.
 
 | Now | Planned |
 |---|---|
-| Relational store: embedded H2 in PostgreSQL mode, Flyway V1–V5 as sole schema owner, `ddl-auto: validate` (any entity/migration drift fails boot) | Managed PostgreSQL for real deployments |
+| Relational store: embedded H2 in PostgreSQL mode, Flyway V1–V6 as sole schema owner, `ddl-auto: validate` (missing or extra tables and columns fail boot; permitted-value drift inside a native ENUM column does not — see §6) | Managed PostgreSQL for real deployments |
 | `GET /api/conversations/{id}/messages` history behind session auth | Retention and privacy policy for stored content |
 | Write path idempotent on `clientMessageId` | Online schema migrations with expansion/contraction phases |
 | Uploads on the local filesystem under `app.upload.dir`, served from that same directory | Object storage (S3-compatible) with signed URLs; the `.meta` sidecar that records the advertised filename would move with it |
@@ -607,7 +621,7 @@ fragments the chat. It is now merely insufficient rather than broken.
 | 16 | Conversation events published only after the DB commit | A client can never see a message the database rejected ("persist before confirming") |
 | 17 | Fixed-window rate limiter, per sender inside `PersistentMessageService` | One choke point covers REST and STOMP sends; retries of persisted sends never consume budget |
 | 18 | Strict CSP with no `unsafe-*` | Compatible with the textContent-only client by construction; blocks injected script even if XSS slipped through |
-| 19 | Flyway as sole schema owner, `ddl-auto: validate` | Entity/migration drift fails boot loudly instead of silently diverging |
+| 19 | Flyway as sole schema owner, `ddl-auto: validate` | Structural drift (a table or column the entity expects but the migrations do not create) fails boot loudly. It cannot see a column whose *permitted values* shrank — that needed V6, see §6 |
 | 20 | `changeSessionId()` on login | Session-fixation defence without a second cookie |
 | 21 | Typing hints throttled server-side (one per member per 2 s) rather than per keystroke | The frame is a hint, so the cost of a second subscriber in a large group must not scale with typing speed |
 | 22 | Read state stored as one position per member (`lastReadAt` + `lastReadMessageId`), not a row per message | A per-message receipt table grows with every message × every member; one position answers both `readByCount` and `unreadCount` |
@@ -623,6 +637,10 @@ fragments the chat. It is now merely insufficient rather than broken.
 | 32 | Client reconnect = heartbeat watchdog → capped backoff → REST catch-up → dedupe by message id | Recovers missed durable frames without a per-user queue, and tolerates at-least-once relay delivery without showing duplicates |
 | 33 | In-app confirmation dialog instead of `window.confirm` | The native dialog cannot be styled, is announced with the page title rather than the question, and steals focus; a dialog that resolves only on the confirm button makes "cancelled" and "dismissed" the same answer |
 | 34 | `/uploads/**` location derived from `app.upload.dir` | The write path and the read path must be one setting; a hardcoded location stores files where nothing serves them |
+| 35 | Demo data behind `chat.seed.enabled`, absent by default | `@ConditionalOnProperty` keeps the seeder out of the context unless asked for, so there is no "we shipped demo users to production" path — a deployment that never sets the flag cannot run the code |
+| 36 | The seeder writes through the services, never SQL | Registration gets BCrypt hashing, paired friendship rows, membership roles, after-commit broadcasts and the per-sender rate budget for free; raw SQL produces a database that looks right and behaves wrong |
+| 37 | One transaction around the whole seed | The guard answers "already seeded?" from a single account, so half-written rows would make every later run skip and leave the world permanently unfinished — proven by `DataSeederAtomicityTest` |
+| 38 | Repair pre-Flyway schema drift in a forward migration (V6) | Developers whose databases were created by `ddl-auto` keep their data and get a working app; telling them to delete their databases would hide the defect instead of fixing it |
 
 ---
 
@@ -644,6 +662,7 @@ fragments the chat. It is now merely insufficient rather than broken.
 | Integration (`HealthEndpointIntegrationTest`, `FriendControllerIntegrationTest`, `FullE2EChatJourneyTest`) | The REST surface: health, friend requests, register → friend → chat journey |
 | Integration (`LandingPageIntegrationTest`) | `/` serves the landing page, `/app` serves the client, every marketing button resolves to a real route, claimed security features are actually enforced |
 | Integration (`UploadServingTest`) | The application boots on a non-default `app.upload.dir` and a stored upload is served back over `/uploads/**`; anonymous and traversing reads are refused — the write path and the read path must stay one setting |
+| Integration (`DataSeederTest`, `DataSeederAtomicityTest`) | The optional demo world boots on a private in-memory database and is actually usable: all ten accounts log in, the friendship graph and the moderation surface (moderator, join request, invitation, invite link, block) exist, the threads carry a pin, forward, reply, edit, soft delete and read receipt, preferences differ per account, and a second run changes nothing — plus a forced mid-seed failure proving nothing is left behind for the "already seeded" guard to mistake for success |
 | Engagement (`TypingServiceTest`, `ReadReceiptTest`, `PinnedMessageTest`, `MessageSearchTest`, `MessageForwardingTest`, `MessageAttachmentTest`) | The rules behind each Phase-4 feature: throttled ephemeral frames, per-member read positions, pin permissions, member-scoped search, dual membership checks on forwards, attachment validation |
 | Groups (`GroupInviteLinkTest`, `GroupInviteLinkRestTest`) | 20 application-level link rules (entropy, expiry, use count, revoke, blocking, uniform refusal) plus 7 HTTP-surface tests for routing and status codes |
 | Notifications (`NotificationIntegrationTest`) | 13 cases over real STOMP sessions: every category reaches the right private topic, preference switches suppress it, and no other session can subscribe |
@@ -656,6 +675,8 @@ pass trivially if refusals were indistinguishable from successful joins.
 would fail a feature that persists correctly but never crosses nodes, which is
 the failure mode a distributed deployment actually exhibits.
 
-Run everything with `./mvnw.cmd test` (211 tests, all against a throwaway
-in-memory database; no external services required — the distributed tests mock
-Redis rather than needing a server).
+Run everything with `./mvnw.cmd test` (218 tests across 35 classes, all against a
+throwaway in-memory database; no external services required — the distributed
+tests mock Redis rather than needing a server, and `DataSeederTest` overrides the
+datasource URL so its ten seeded accounts cannot leak into the database the rest
+of the suite shares).
