@@ -202,13 +202,14 @@ public class PersistentMessageService {
 
     @Transactional(readOnly = true)
     public List<PersistentMessageResponse> getMessages(UUID conversationId, UUID currentUserId, int page, int size) {
-        memberRepository.findByConversationIdAndUserId(conversationId, currentUserId)
+        ConversationMemberEntity member = memberRepository.findByConversationIdAndUserId(conversationId, currentUserId)
             .orElseThrow(() -> new ChatException(ChatException.NOT_MEMBER, "You are not a member of this conversation"));
 
         int boundedPage = Math.max(0, page);
         int boundedSize = Math.clamp(size, 1, 100);
 
-        Page<MessageEntity> pageData = messageRepository.findRecentMessages(conversationId, PageRequest.of(boundedPage, boundedSize));
+        Page<MessageEntity> pageData = messageRepository.findRecentMessages(
+            conversationId, member.historyCutoff(), PageRequest.of(boundedPage, boundedSize));
         List<MessageEntity> list = new ArrayList<>(pageData.getContent());
         Collections.reverse(list);
         return list.stream().map(this::enrich).toList();
@@ -263,18 +264,110 @@ public class PersistentMessageService {
             throw new ChatException(ChatException.FORBIDDEN, "You are not allowed to delete this message");
         }
 
+        tombstone(message);
+    }
+
+    /**
+     * Takes one message down and tells the conversation: content is replaced by
+     * the tombstone text, the reply it quoted is dropped, and its reactions go
+     * with it. The row itself stays so the thread keeps its shape for everyone.
+     */
+    private void tombstone(MessageEntity message) {
         message.setDeleted(true);
         message.setContent("This message was deleted.");
         message.setReplyToId(null);
         messageRepository.save(message);
-        reactionRepository.deleteByMessageId(messageId);
+        reactionRepository.deleteByMessageId(message.getId());
 
         Map<String, Object> payload = Map.of(
-            "messageId", messageId,
+            "messageId", message.getId(),
             "conversationId", message.getConversationId(),
             "event", "MESSAGE_DELETED"
         );
         broadcastConversationEvent(message.getConversationId(), "MESSAGE_DELETED", payload);
+    }
+
+    /**
+     * Tombstones every selected message in this conversation, for everyone, under
+     * the same rule a single delete applies: your own, or anyone's if you are the
+     * group's owner or a moderator. The whole batch is one transaction, and one
+     * message the caller may not delete stops the lot - a partial bulk delete
+     * would leave a client showing a selection it half-acted on.
+     *
+     * @return how many messages were taken down by this call
+     */
+    @Transactional
+    public int deleteMessagesBulk(UUID conversationId, UUID currentUserId, List<UUID> messageIds) {
+        ConversationMemberEntity member = memberRepository.findByConversationIdAndUserId(conversationId, currentUserId)
+            .orElseThrow(() -> new ChatException(ChatException.NOT_MEMBER, "You are not a member of this conversation"));
+
+        boolean isManager = member.getRole() == MemberRole.OWNER || member.getRole() == MemberRole.MODERATOR;
+        List<MessageEntity> targets = new ArrayList<>();
+
+        for (UUID messageId : new LinkedHashSet<>(messageIds)) {
+            MessageEntity message = messageRepository.findById(messageId)
+                .orElseThrow(() -> new ChatException(ChatException.MESSAGE_NOT_FOUND, "One of the selected messages no longer exists"));
+            if (!conversationId.equals(message.getConversationId())) {
+                throw new ChatException(ChatException.INVALID_COMMAND, "A selected message belongs to another conversation");
+            }
+            if (message.isDeleted()) {
+                continue;
+            }
+            if (!isManager && !message.getSenderId().equals(currentUserId)) {
+                throw new ChatException(ChatException.FORBIDDEN,
+                    "You can only delete your own messages. A group owner or moderator can delete anyone's.");
+            }
+            targets.add(message);
+        }
+
+        targets.forEach(this::tombstone);
+        return targets.size();
+    }
+
+    /**
+     * Forwards every selected message into {@code destinationId} in one call.
+     * Each copy goes through the same single forward, so a copy cannot escape a
+     * conversation the sender is not in, and each still costs one send from the
+     * per-sender budget. Passing a {@code clientMessageId} makes the batch
+     * replayable: the id is stamped per source message, so a client that retries
+     * an unacknowledged bulk forward gets the copies back instead of a second set.
+     *
+     * @return the copies, in the order the selections were sent
+     */
+    @Transactional
+    public List<PersistentMessageResponse> forwardMessagesBulk(UUID destinationId, UUID currentUserId, String username,
+                                                               List<UUID> sourceMessageIds, String clientMessageId) {
+        memberRepository.findByConversationIdAndUserId(destinationId, currentUserId)
+            .orElseThrow(() -> new ChatException(ChatException.NOT_MEMBER, "You are not a member of this conversation"));
+
+        String normalizedBatch = clientMessageId == null || clientMessageId.isBlank()
+            ? null
+            : clientMessageId.trim();
+
+        // Checked in full before the first copy is written, so a batch that is
+        // not entitled to be forwarded writes nothing rather than half a set.
+        List<MessageEntity> sources = new ArrayList<>();
+        for (UUID sourceId : new LinkedHashSet<>(sourceMessageIds)) {
+            MessageEntity source = messageRepository.findById(sourceId)
+                .orElseThrow(() -> new ChatException(ChatException.MESSAGE_NOT_FOUND, "One of the selected messages no longer exists"));
+            if (source.isDeleted()) {
+                throw new ChatException(ChatException.INVALID_COMMAND, "Cannot forward a deleted message");
+            }
+            memberRepository.findByConversationIdAndUserId(source.getConversationId(), currentUserId)
+                .orElseThrow(() -> new ChatException(ChatException.NOT_MEMBER, "You are not a member of the source conversation"));
+            if (source.getConversationId().equals(destinationId)) {
+                throw new ChatException(ChatException.INVALID_COMMAND, "These messages are already in that conversation");
+            }
+            sources.add(source);
+        }
+
+        List<PersistentMessageResponse> copies = new ArrayList<>();
+        for (MessageEntity source : sources) {
+            String perMessageId = normalizedBatch == null ? null : normalizedBatch + ":" + source.getId();
+            copies.add(sendMessage(destinationId, currentUserId, username, source.getContent(),
+                null, perMessageId, source.getId()));
+        }
+        return copies;
     }
 
     /**
@@ -362,10 +455,10 @@ public class PersistentMessageService {
 
     @Transactional(readOnly = true)
     public List<PersistentMessageResponse> getPinnedMessages(UUID conversationId, UUID currentUserId) {
-        memberRepository.findByConversationIdAndUserId(conversationId, currentUserId)
+        ConversationMemberEntity member = memberRepository.findByConversationIdAndUserId(conversationId, currentUserId)
             .orElseThrow(() -> new ChatException(ChatException.NOT_MEMBER, "You are not a member of this conversation"));
         List<MessageEntity> pinned = messageRepository
-            .findPinned(conversationId, PageRequest.of(0, 20)).getContent();
+            .findPinned(conversationId, member.historyCutoff(), PageRequest.of(0, 20)).getContent();
         return pinned.stream().map(this::enrich).toList();
     }
 
@@ -399,12 +492,12 @@ public class PersistentMessageService {
         if (trimmed.length() > 100) {
             throw new ChatException(ChatException.INVALID_COMMAND, "Search query must be at most 100 characters");
         }
-        memberRepository.findByConversationIdAndUserId(conversationId, currentUserId)
+        ConversationMemberEntity searcher = memberRepository.findByConversationIdAndUserId(conversationId, currentUserId)
             .orElseThrow(() -> new ChatException(ChatException.NOT_MEMBER, "You are not a member of this conversation"));
         int boundedLimit = Math.clamp(limit, 1, 50);
         String escaped = trimmed.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
         List<MessageEntity> found = messageRepository
-            .searchContent(conversationId, escaped, PageRequest.of(0, boundedLimit)).getContent();
+            .searchContent(conversationId, searcher.historyCutoff(), escaped, PageRequest.of(0, boundedLimit)).getContent();
         return found.stream().map(this::enrich).toList();
     }
 
@@ -470,7 +563,13 @@ public class PersistentMessageService {
         return content.length() <= REPLY_PREVIEW_LENGTH ? content : content.substring(0, REPLY_PREVIEW_LENGTH) + "...";
     }
 
-    private void broadcastConversationEvent(UUID conversationId, String eventType, Object payload) {
+    /**
+     * Publishes one durable frame on a conversation topic after the surrounding
+     * transaction commits. Public because {@link ConversationService} reports
+     * conversation-level events through the same discipline: a frame that went
+     * out before the commit would describe rows a rollback can still erase.
+     */
+    public void broadcastConversationEvent(UUID conversationId, String eventType, Object payload) {
         String destination = MessageRouter.conversationTopic(conversationId);
         Map<String, Object> frame = Map.of(
             "event", eventType,

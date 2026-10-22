@@ -3,6 +3,8 @@ package com.example.chat.api;
 import com.example.chat.application.AuthService;
 import com.example.chat.application.PersistentMessageService;
 import com.example.chat.dto.auth.UserProfileResponse;
+import com.example.chat.dto.message.BulkDeleteMessageDto;
+import com.example.chat.dto.message.BulkForwardMessageDto;
 import com.example.chat.dto.message.EditMessageDto;
 import com.example.chat.dto.message.ForwardMessageDto;
 import com.example.chat.dto.message.PersistentMessageResponse;
@@ -65,6 +67,25 @@ public class MessageController {
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
+    /**
+     * Copies several selected messages into this conversation in one request.
+     * Returns 201 with the copies; a batch the caller is not entitled to forward
+     * writes nothing.
+     */
+    @PostMapping("/api/conversations/{conversationId}/messages/bulk-forward")
+    public ResponseEntity<Map<String, Object>> forwardMessagesBulk(
+            Principal principal,
+            @PathVariable("conversationId") UUID conversationId,
+            @Valid @RequestBody BulkForwardMessageDto request) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        List<PersistentMessageResponse> copies = messageService.forwardMessagesBulk(
+            conversationId, user.id(), user.username(), request.messageIds(), request.clientMessageId());
+        return ResponseEntity.status(HttpStatus.CREATED).body(Map.of(
+            "forwarded", copies.size(),
+            "messages", copies
+        ));
+    }
+
     @PutMapping("/api/messages/{messageId}")
     public ResponseEntity<PersistentMessageResponse> editMessage(
             Principal principal,
@@ -81,6 +102,24 @@ public class MessageController {
         UserProfileResponse user = authService.getCurrentUser(principal);
         messageService.deleteMessage(messageId, user.id());
         return ResponseEntity.ok(Map.of("message", "Message deleted successfully"));
+    }
+
+    /**
+     * Deletes the selected messages of one conversation, for everyone, under the
+     * same permission as a single delete. The batch is all-or-nothing: one message
+     * outside the caller's reach stops the whole request and nothing is deleted.
+     */
+    @PostMapping("/api/conversations/{conversationId}/messages/bulk-delete")
+    public ResponseEntity<Map<String, Object>> deleteMessagesBulk(
+            Principal principal,
+            @PathVariable("conversationId") UUID conversationId,
+            @Valid @RequestBody BulkDeleteMessageDto request) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        int deleted = messageService.deleteMessagesBulk(conversationId, user.id(), request.messageIds());
+        return ResponseEntity.ok(Map.of(
+            "deleted", deleted,
+            "message", deleted == 1 ? "Message deleted" : deleted + " messages deleted"
+        ));
     }
 
     @PostMapping("/api/messages/{messageId}/reactions")

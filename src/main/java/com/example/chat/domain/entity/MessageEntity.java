@@ -37,7 +37,7 @@ public class MessageEntity {
     @Column(name = "reply_to_id")
     private UUID replyToId;
 
-    @Column(name = "client_message_id", length = 64)
+    @Column(name = "client_message_id", length = 128)
     private String clientMessageId;
 
     @Column(nullable = false)

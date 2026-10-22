@@ -33,6 +33,7 @@ public class ConversationService {
     private final GroupInvitationRepository groupInvitationRepository;
     private final PresencePolicy presencePolicy;
     private final NotificationService notificationService;
+    private final PersistentMessageService messageService;
     private final TransactionTemplate transactionTemplate;
     private final Object[] pairLocks;
 
@@ -45,6 +46,7 @@ public class ConversationService {
                                GroupInvitationRepository groupInvitationRepository,
                                PresencePolicy presencePolicy,
                                NotificationService notificationService,
+                               PersistentMessageService messageService,
                                PlatformTransactionManager transactionManager) {
         this.conversationRepository = conversationRepository;
         this.memberRepository = memberRepository;
@@ -55,6 +57,7 @@ public class ConversationService {
         this.groupInvitationRepository = groupInvitationRepository;
         this.presencePolicy = presencePolicy;
         this.notificationService = notificationService;
+        this.messageService = messageService;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.pairLocks = new Object[PAIR_LOCK_STRIPES];
         for (int i = 0; i < PAIR_LOCK_STRIPES; i++) {
@@ -353,15 +356,44 @@ public class ConversationService {
         return mapToSummary(conv, currentUserId);
     }
 
+    /**
+     * Destroys the conversation and its messages for every member. A direct chat
+     * is owned equally by both participants, so either may destroy it; a group
+     * belongs to its owner, and anyone else who wants out leaves instead.
+     */
     @Transactional
-    public void deleteGroup(UUID conversationId, UUID currentUserId) {
+    public void deleteConversation(UUID conversationId, UUID currentUserId) {
         ConversationMemberEntity currentMember = requireMembership(conversationId, currentUserId);
-        if (currentMember.getRole() != MemberRole.OWNER) {
-            throw new ChatException(ChatException.FORBIDDEN, "Only group owner can delete the group");
+        ConversationEntity conv = conversationRepository.findById(conversationId)
+            .orElseThrow(() -> new ChatException(ChatException.CONVERSATION_NOT_FOUND, "Conversation not found"));
+
+        if (conv.getType() == ConversationType.GROUP && currentMember.getRole() != MemberRole.OWNER) {
+            throw new ChatException(ChatException.FORBIDDEN, "Only the group owner can delete the group");
         }
+
         memberRepository.deleteByConversationId(conversationId);
         messageRepository.deleteByConversationId(conversationId);
         conversationRepository.deleteById(conversationId);
+
+        messageService.broadcastConversationEvent(conversationId, "CONVERSATION_DELETED",
+            Map.of("conversationId", conversationId));
+    }
+
+    /**
+     * Clears the chat for the caller alone. Their view of the history is wiped and
+     * the chat leaves their list; every other member's copy is untouched, because
+     * only this membership row moves. The chat returns to the caller's list as
+     * soon as a message is written after the cutoff, and shows nothing before it.
+     */
+    @Transactional
+    public void clearConversationForUser(UUID conversationId, UUID currentUserId) {
+        ConversationMemberEntity member = requireMembership(conversationId, currentUserId);
+        Instant cutoff = Instant.now();
+        member.setClearedAt(cutoff);
+        member.setLastReadAt(cutoff);
+        member.setLastReadMessageId(null);
+        member.setArchived(false);
+        memberRepository.save(member);
     }
 
     @Transactional
@@ -490,7 +522,16 @@ public class ConversationService {
             }
         }
 
-        long unread = messageRepository.countUnreadMessages(conv.getId(), currentUserId);
+        ConversationMemberEntity viewer = memberRepository
+            .findByConversationIdAndUserId(conv.getId(), currentUserId).orElse(null);
+        Instant cutoff = viewer == null ? Instant.EPOCH : viewer.historyCutoff();
+        long unread = messageRepository.countUnreadMessages(conv.getId(), currentUserId, cutoff);
+
+        // The last-message preview lives on the shared conversation row, so a
+        // member who cleared the chat must not be shown text they erased for
+        // themselves - even though getConversationDetails can reach such a chat.
+        boolean previewCleared = viewer != null && viewer.getClearedAt() != null
+            && (conv.getLastMessageAt() == null || !conv.getLastMessageAt().isAfter(viewer.getClearedAt()));
 
         return new ConversationSummaryResponse(
             conv.getId(),
@@ -499,9 +540,9 @@ public class ConversationService {
             conv.getDescription(),
             avatar,
             conv.getCreatedBy(),
-            conv.getLastMessageText(),
-            conv.getLastMessageAt(),
-            conv.getLastMessageSender(),
+            previewCleared ? null : conv.getLastMessageText(),
+            previewCleared ? null : conv.getLastMessageAt(),
+            previewCleared ? null : conv.getLastMessageSender(),
             unread,
             conv.getType() == ConversationType.GROUP,
             conv.isPrivate(),

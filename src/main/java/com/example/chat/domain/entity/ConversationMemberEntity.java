@@ -32,6 +32,13 @@ public class ConversationMemberEntity {
     @Column(nullable = false)
     private boolean archived = false;
 
+    /**
+     * Set when this member cleared the chat for themselves: they see no message
+     * created at or before this instant, and nobody else's copy changes.
+     */
+    @Column(name = "cleared_at")
+    private Instant clearedAt;
+
     @Column(nullable = false, updatable = false)
     private Instant joinedAt = Instant.now();
 
@@ -64,6 +71,14 @@ public class ConversationMemberEntity {
 
     public boolean isArchived() { return archived; }
     public void setArchived(boolean archived) { this.archived = archived; }
+
+    public Instant getClearedAt() { return clearedAt; }
+    public void setClearedAt(Instant clearedAt) { this.clearedAt = clearedAt; }
+
+    /** The oldest message this member may see; the epoch when the chat was never cleared. */
+    public Instant historyCutoff() {
+        return clearedAt == null ? Instant.EPOCH : clearedAt;
+    }
 
     public Instant getJoinedAt() { return joinedAt; }
     public void setJoinedAt(Instant joinedAt) { this.joinedAt = joinedAt; }

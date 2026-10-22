@@ -142,7 +142,7 @@ class FullE2EChatJourneyTest {
 
         // 10. Verify group-admin and ordinary-member permissions
         // Bob is ordinary member, cannot delete the whole group
-        assertThatThrownBy(() -> conversationService.deleteGroup(groupChat.id(), bob.id()))
+        assertThatThrownBy(() -> conversationService.deleteConversation(groupChat.id(), bob.id()))
             .isInstanceOf(ChatException.class);
 
         // Alice is owner, can update group details

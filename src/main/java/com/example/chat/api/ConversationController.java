@@ -136,12 +136,26 @@ public class ConversationController {
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<Map<String, String>> deleteGroup(
+    public ResponseEntity<Map<String, String>> deleteConversation(
             Principal principal,
             @PathVariable("id") UUID conversationId) {
         UserProfileResponse user = authService.getCurrentUser(principal);
-        conversationService.deleteGroup(conversationId, user.id());
-        return ResponseEntity.ok(Map.of("message", "Group deleted successfully"));
+        conversationService.deleteConversation(conversationId, user.id());
+        return ResponseEntity.ok(Map.of("message", "Conversation deleted for everyone"));
+    }
+
+    /**
+     * Wipes the caller's view of this chat and takes it out of their list. Other
+     * members keep their copy; the chat returns once something is written after
+     * the cutoff.
+     */
+    @PostMapping("/{id}/clear")
+    public ResponseEntity<Map<String, String>> clearConversation(
+            Principal principal,
+            @PathVariable("id") UUID conversationId) {
+        UserProfileResponse user = authService.getCurrentUser(principal);
+        conversationService.clearConversationForUser(conversationId, user.id());
+        return ResponseEntity.ok(Map.of("message", "Chat cleared for you"));
     }
 
     @PutMapping("/{id}/archive")

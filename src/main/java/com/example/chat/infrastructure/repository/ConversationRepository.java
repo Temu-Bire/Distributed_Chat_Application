@@ -29,8 +29,15 @@ public interface ConversationRepository extends JpaRepository<ConversationEntity
     @Query("SELECT c FROM ConversationEntity c WHERE c.id = :id")
     Optional<ConversationEntity> findByIdForUpdate(@Param("id") UUID id);
 
+    /**
+     * The list one member sees. A chat they cleared for themselves stays out of
+     * it until something is written after their cutoff, which is what brings it
+     * back - so clearing needs no second "hidden" flag to undo later.
+     */
     @Query("SELECT c FROM ConversationEntity c JOIN ConversationMemberEntity cm ON c.id = cm.conversationId " +
-           "WHERE cm.userId = :userId AND cm.archived = false ORDER BY c.updatedAt DESC")
+           "WHERE cm.userId = :userId AND cm.archived = false " +
+           "AND (cm.clearedAt IS NULL OR c.lastMessageAt IS NULL OR c.lastMessageAt > cm.clearedAt) " +
+           "ORDER BY c.updatedAt DESC")
     List<ConversationEntity> findActiveConversationsForUser(@Param("userId") UUID userId);
 
     @Query("SELECT c FROM ConversationEntity c " +

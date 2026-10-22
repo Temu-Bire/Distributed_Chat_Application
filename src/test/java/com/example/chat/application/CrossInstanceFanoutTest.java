@@ -88,6 +88,30 @@ class CrossInstanceFanoutTest {
     }
 
     @Test
+    @DisplayName("a bulk delete relays one deletion frame per message")
+    void bulkDeleteIsRelayed() {
+        PersistentMessageResponse first = messageService.sendMessage(direct.id(), alice.id(), alice.username(), "batch one");
+        PersistentMessageResponse second = messageService.sendMessage(direct.id(), alice.id(), alice.username(), "batch two");
+
+        messageService.deleteMessagesBulk(direct.id(), alice.id(), java.util.List.of(first.id(), second.id()));
+
+        assertThat(relayedEvent(destinationOf(direct.id()), "MESSAGE_DELETED")).isNotNull();
+        assertThat(relayedFrames(destinationOf(direct.id()), "MESSAGE_DELETED"))
+            .as("both selected messages announced their own removal")
+            .hasSizeGreaterThanOrEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("deleting a chat for everyone is relayed so open clients drop it")
+    void conversationDeletionIsRelayed() {
+        messageService.sendMessage(direct.id(), alice.id(), alice.username(), "before the wipe");
+
+        conversationService.deleteConversation(direct.id(), alice.id());
+
+        assertThat(relayedEvent(destinationOf(direct.id()), "CONVERSATION_DELETED")).isNotNull();
+    }
+
+    @Test
     @DisplayName("a reaction is relayed")
     void reactionIsRelayed() {
         PersistentMessageResponse msg = messageService.sendMessage(direct.id(), alice.id(), alice.username(), "ship it");
@@ -187,6 +211,16 @@ class CrossInstanceFanoutTest {
             .filter(frame -> frame != null && event.equals(frame.get(EVENT)))
             .reduce((first, second) -> second)
             .orElse(null);
+    }
+
+    /** Every frame of that event type this conversation pushed onto the cluster channel. */
+    private java.util.List<Map<?, ?>> relayedFrames(String destination, String event) {
+        ArgumentCaptor<Object> payloads = ArgumentCaptor.forClass(Object.class);
+        verify(relay, atLeastOnce()).publishCrossInstance(eq(destination), payloads.capture());
+        return payloads.getAllValues().stream()
+            .map(CrossInstanceFanoutTest::asMap)
+            .filter(frame -> frame != null && event.equals(frame.get(EVENT)))
+            .toList();
     }
 
     private static Map<?, ?> asMap(Object payload) {
