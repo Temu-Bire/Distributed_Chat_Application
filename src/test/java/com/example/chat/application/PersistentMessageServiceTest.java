@@ -178,7 +178,7 @@ class PersistentMessageServiceTest {
     }
 
     @Test
-    @DisplayName("reaction toggles on then off, aggregated per emoji")
+    @DisplayName("one reaction per person: the same emoji clears, a different one replaces it")
     void toggleReaction() {
         PersistentMessageResponse msg = messageService.sendMessage(directConv.id(), alice.id(), alice.username(), "React to me");
 
@@ -186,17 +186,23 @@ class PersistentMessageServiceTest {
         assertThat(liked.reactions()).containsExactly(new com.example.chat.dto.message.ReactionSummaryDto("👍", 1));
 
         messageService.toggleReaction(msg.id(), bob.id(), "👍");
-        PersistentMessageResponse both = messageService.toggleReaction(msg.id(), alice.id(), "❤️");
-        assertThat(both.reactions()).extracting("emoji", "count")
-            .containsExactlyInAnyOrder(
-                org.assertj.core.groups.Tuple.tuple("👍", 2L),
-                org.assertj.core.groups.Tuple.tuple("❤️", 1L));
-
-        PersistentMessageResponse removed = messageService.toggleReaction(msg.id(), alice.id(), "👍");
-        assertThat(removed.reactions()).extracting("emoji", "count")
+        PersistentMessageResponse replaced = messageService.toggleReaction(msg.id(), alice.id(), "❤️");
+        assertThat(replaced.reactions()).extracting("emoji", "count")
+            .as("alice moving to another emoji leaves bob's 👍 alone and takes hers with her")
             .containsExactlyInAnyOrder(
                 org.assertj.core.groups.Tuple.tuple("👍", 1L),
                 org.assertj.core.groups.Tuple.tuple("❤️", 1L));
+
+        PersistentMessageResponse second = messageService.toggleReaction(msg.id(), alice.id(), "🔥");
+        assertThat(second.reactions()).extracting("emoji", "count")
+            .as("a person never stacks two of their own emojis on one message")
+            .containsExactlyInAnyOrder(
+                org.assertj.core.groups.Tuple.tuple("👍", 1L),
+                org.assertj.core.groups.Tuple.tuple("🔥", 1L));
+
+        PersistentMessageResponse removed = messageService.toggleReaction(msg.id(), alice.id(), "🔥");
+        assertThat(removed.reactions())
+            .containsExactly(new com.example.chat.dto.message.ReactionSummaryDto("👍", 1));
     }
 
     @Test

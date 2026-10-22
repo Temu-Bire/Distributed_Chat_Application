@@ -278,8 +278,9 @@ public class PersistentMessageService {
     }
 
     /**
-     * Adds the emoji if the user has not reacted with it yet, removes it otherwise.
-     * Returns the message with its updated reaction summary.
+     * One reaction per person per message: tapping an emoji attaches it, tapping
+     * the same emoji again clears it, and tapping a different one replaces what
+     * the person had. Returns the message with its updated reaction summary.
      */
     @Transactional
     public PersistentMessageResponse toggleReaction(UUID messageId, UUID currentUserId, String emoji) {
@@ -301,11 +302,16 @@ public class PersistentMessageService {
         memberRepository.findByConversationIdAndUserId(message.getConversationId(), currentUserId)
             .orElseThrow(() -> new ChatException(ChatException.NOT_MEMBER, "You are not a member of this conversation"));
 
-        Optional<MessageReactionEntity> existing =
-            reactionRepository.findByMessageIdAndUserIdAndEmoji(messageId, currentUserId, normalizedEmoji);
-        if (existing.isPresent()) {
-            reactionRepository.delete(existing.get());
+        List<MessageReactionEntity> mine = reactionRepository.findByMessageIdAndUserId(messageId, currentUserId);
+        Optional<MessageReactionEntity> same = mine.stream()
+            .filter(reaction -> reaction.getEmoji().equals(normalizedEmoji))
+            .findFirst();
+        if (same.isPresent()) {
+            reactionRepository.delete(same.get());
         } else {
+            // The row lock above is what makes this read-modify-write safe:
+            // nobody else is inside toggleReaction for this message yet.
+            reactionRepository.deleteAll(mine);
             reactionRepository.save(new MessageReactionEntity(messageId, currentUserId, normalizedEmoji));
         }
         reactionRepository.flush();
