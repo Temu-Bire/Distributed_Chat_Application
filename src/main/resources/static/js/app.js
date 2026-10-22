@@ -367,8 +367,9 @@
             if (person.message) {
                 mid.appendChild(el('span', 'request-message', '"' + person.message + '"'));
             }
-            attachProfileOpen(row, avatar, mid, profileIdOf(person),
-                person.displayName || person.senderDisplayName || person.receiverDisplayName || 'this user');
+            attachRowOpener(row, avatar, mid,
+                'the profile of ' + (person.displayName || person.senderDisplayName || person.receiverDisplayName || 'this user'),
+                () => openUserProfile(profileIdOf(person)));
             if (actionFactory) row.appendChild(actionFactory(person));
             list.appendChild(row);
         });
@@ -892,8 +893,8 @@
         $('app-shell').classList.remove('show-page');
         setAvatar($('chat-avatar'), convTitle(conv), conv.avatarUrl);
         $('chat-title').textContent = convTitle(conv);
-        renderChatPresence(null);
-        refreshChatPresence();
+        renderChatHeader(null);
+        refreshChatHeader();
         renderConversations();
         subscribeConversation(id);
         clearReply();
@@ -908,6 +909,8 @@
                 const members = await request('/conversations/' + id + '/members');
                 const me = members.find((member) => state.user && member.userId === state.user.id);
                 conv.myRole = me ? me.role : null;
+                conv.memberCount = members.length;
+                renderChatHeader(null);
             } catch (err) {
                 conv.myRole = null;
             }
@@ -1016,8 +1019,8 @@
             const mid = el('div');
             mid.appendChild(el('strong', '', group.title));
             mid.appendChild(el('span', 'muted', group.memberCount + ' members · ' + (group.isPrivate ? 'Private' : 'Public')));
-            row.appendChild(avatar);
-            row.appendChild(mid);
+            attachRowOpener(row, avatar, mid, 'the profile of ' + group.title,
+                () => openGroupProfile(group.id));
             const action = el('div', 'row-gap');
             if (group.membershipStatus === 'MEMBER') {
                 const open = el('button', 'pill pill-ok', 'Open');
@@ -1036,13 +1039,9 @@
                 const requestJoin = el('button', 'pill pill-ok', 'Request to Join');
                 requestJoin.type = 'button';
                 requestJoin.addEventListener('click', async () => {
-                    try {
-                        await request('/conversations/groups/' + group.id + '/join-requests', { method: 'POST' });
-                        toast('Join request sent');
+                    if (await requestGroupJoin(group)) {
                         group.membershipStatus = 'PENDING';
                         renderDiscoverGroups();
-                    } catch (err) {
-                        toast(err.message);
                     }
                 });
                 action.appendChild(requestJoin);
@@ -1050,14 +1049,9 @@
                 const join = el('button', 'pill pill-ok', 'Join');
                 join.type = 'button';
                 join.addEventListener('click', async () => {
-                    try {
-                        await request('/conversations/groups/' + group.id + '/join', { method: 'POST' });
-                        toast('Joined group');
-                        await loadConversations();
+                    if (await joinGroup(group)) {
                         group.membershipStatus = 'MEMBER';
                         renderDiscoverGroups();
-                    } catch (err) {
-                        toast(err.message);
                     }
                 });
                 action.appendChild(join);
@@ -1151,8 +1145,9 @@
 
     function openModal(title) {
         modalReturnFocus = document.activeElement;
-        // Whatever card was open is gone now, so a late presence refresh must
-        // not paint it over this modal.
+        // Whatever card was open is gone now: a read still in flight for it must
+        // not paint over this modal, and it is no longer the card to refresh.
+        cardSeq++;
         openProfileId = null;
         $('modal-title').textContent = title;
         const body = $('modal-body');
@@ -1375,132 +1370,150 @@
             toast('Open a group chat to manage it');
             return;
         }
+        let group;
         try {
-            const details = await request('/conversations/' + conv.id);
-            const members = await request('/conversations/' + conv.id + '/members');
-            state.groupMembers = members;
-            const me = members.find((member) => state.user && member.userId === state.user.id);
-            conv.myRole = me ? me.role : null;
-            const isAdmin = conv.myRole === 'OWNER' || conv.myRole === 'MODERATOR';
-            openView('group');
-            $('group-manage-title').textContent = details.title || convTitle(conv);
-            $('group-manage-meta').textContent = members.length + ' members · Group' + (conv.myRole ? ' · You are ' + conv.myRole.toLowerCase() : '');
-            $('group-members-heading').textContent = 'Members (' + members.length + ')';
-            $('group-title-input').value = details.title || '';
-            $('group-desc-input').value = details.description || '';
-            $('group-title-input').disabled = !isAdmin;
-            $('group-desc-input').disabled = !isAdmin;
-            $('group-private-input').checked = !!details.isPrivate;
-            $('group-private-input').disabled = !isAdmin;
-            $('group-save-btn').disabled = !isAdmin;
-            $('group-created').textContent = details.createdAt
-                ? 'Created ' + new Date(details.createdAt).toLocaleDateString()
-                : 'Created recently';
-            const list = $('group-members-list');
-            while (list.firstChild) list.removeChild(list.firstChild);
-            members.forEach((member) => {
-                const row = el('div', 'card-row');
-                const avatar = el('div', 'avatar');
-                setAvatar(avatar, member.displayName, member.avatarUrl);
-                const mid = el('div');
-                mid.appendChild(el('strong', '', member.displayName));
-                mid.appendChild(el('span', 'muted', member.role + (member.online ? ' · Online' : '')));
-                attachProfileOpen(row, avatar, mid, member.userId, member.displayName);
-                const isSelf = member.userId === state.user.id;
-                if (!isSelf && isAdmin) {
-                    const actions = el('div', 'row-gap');
-                    if (conv.myRole === 'OWNER' && member.role === 'MEMBER') {
-                        const promote = el('button', 'pill pill-ok', 'Promote');
-                        promote.type = 'button';
-                        promote.addEventListener('click', () => changeMemberRole(conv.id, member.userId, 'MODERATOR'));
-                        actions.appendChild(promote);
-                    }
-                    if (conv.myRole === 'OWNER' && member.role === 'MODERATOR') {
-                        const demote = el('button', 'pill pill-mute', 'Demote');
-                        demote.type = 'button';
-                        demote.addEventListener('click', () => changeMemberRole(conv.id, member.userId, 'MEMBER'));
-                        actions.appendChild(demote);
-                    }
-                    const canRemove = conv.myRole === 'OWNER' || member.role === 'MEMBER';
-                    if (canRemove) {
-                        const remove = el('button', 'pill pill-no', 'Remove');
-                        remove.type = 'button';
-                        remove.addEventListener('click', async () => {
-                            const ok = await confirmAction({
-                                title: 'Remove ' + (member.displayName || 'this member') + '?',
-                                message: 'They lose access to this group and its history immediately.',
-                                confirm: 'Remove'
-                            });
-                            if (!ok) return;
-                            try {
-                                await request('/conversations/' + conv.id + '/members/' + member.userId, { method: 'DELETE' });
-                                toast('Member removed');
-                                openGroupManage();
-                            } catch (err) {
-                                toast(err.message);
-                            }
-                        });
-                        actions.appendChild(remove);
-                    }
-                    if (member.role === 'MEMBER') {
-                        const block = el('button', 'pill pill-no', 'Block');
-                        block.type = 'button';
-                        block.addEventListener('click', async () => {
-                            const ok = await confirmAction({
-                                title: 'Block ' + (member.displayName || 'this member') + '?',
-                                message: 'They are removed from the group and cannot join, request to join or use an invite link.',
-                                confirm: 'Block'
-                            });
-                            if (!ok) return;
-                            try {
-                                await request('/conversations/groups/' + conv.id + '/blocks', {
-                                    method: 'POST',
-                                    body: JSON.stringify({ userId: member.userId })
-                                });
-                                toast('User blocked from group');
-                                openGroupManage();
-                            } catch (err) {
-                                toast(err.message);
-                            }
-                        });
-                        actions.appendChild(block);
-                    }
-                    row.appendChild(actions);
-                }
-                list.appendChild(row);
-            });
-
-            $('add-member-btn').hidden = !isAdmin;
-            $('group-delete-btn').hidden = conv.myRole !== 'OWNER';
-            document.querySelectorAll('.group-menu__item[data-gtab="requests"], .group-menu__item[data-gtab="invitations"], .group-menu__item[data-gtab="blocked"], .group-menu__item[data-gtab="links"]')
-                .forEach((item) => { item.hidden = !isAdmin; });
-            if (!isAdmin) switchGroupTab('info');
-
-            if (isAdmin) {
-                try {
-                    state.inviteLinks = await request('/conversations/groups/' + conv.id + '/invite-links');
-                } catch (err) {
-                    state.inviteLinks = [];
-                }
-                renderInviteLinks(conv.id);
-                try {
-                    const joinRequests = await request('/conversations/groups/' + conv.id + '/join-requests');
-                    const invitations = await request('/conversations/groups/' + conv.id + '/invitations');
-                    renderGroupJoinRequests(joinRequests);
-                    renderGroupInvitations(invitations);
-                } catch (err) {
-                    console.error('Failed to load join requests/invitations:', err);
-                }
-                try {
-                    state.groupBlocked = await request('/conversations/groups/' + conv.id + '/blocks');
-                    renderGroupBlocked();
-                } catch (err) {
-                    console.error('Failed to load blocked members:', err);
-                }
-            }
+            // One read for the card and the roster: the profile endpoint is the
+            // place the server decides what this caller may see.
+            group = await request('/conversations/groups/' + conv.id + '/profile');
         } catch (err) {
             toast(err.message);
+            return;
         }
+        const members = group.members;
+        state.groupMembers = members;
+        conv.myRole = group.myRole;
+        conv.memberCount = group.memberCount;
+        const isAdmin = group.myRole === 'OWNER' || group.myRole === 'MODERATOR';
+        openView('group');
+        $('group-manage-title').textContent = group.title;
+        $('group-manage-meta').textContent = group.memberCount + ' members · '
+            + (group.isPrivate ? 'Private group' : 'Public group')
+            + (group.myRole ? ' · You are ' + roleLabel(group.myRole).toLowerCase() : '');
+        $('group-members-heading').textContent = 'Members (' + group.memberCount + ')';
+        renderGroupInfo(group);
+        $('group-title-input').value = group.title || '';
+        $('group-desc-input').value = group.description || '';
+        $('group-private-input').checked = !!group.isPrivate;
+        // Plain members get the facts as text rather than a form they cannot use.
+        $('group-info-edit').hidden = !isAdmin;
+        const list = $('group-members-list');
+        while (list.firstChild) list.removeChild(list.firstChild);
+        members.forEach((member) => {
+            const row = el('div', 'card-row');
+            const avatar = el('div', 'avatar');
+            setAvatar(avatar, member.displayName, member.avatarUrl);
+            const mid = el('div');
+            mid.appendChild(el('strong', '', member.displayName));
+            mid.appendChild(el('span', 'muted', roleLabel(member.role) + (member.online ? ' · Online' : '')));
+            attachRowOpener(row, avatar, mid, 'the profile of ' + (member.displayName || 'a member'),
+                () => openUserProfile(member.userId));
+            const isSelf = member.userId === state.user.id;
+            if (!isSelf && isAdmin) {
+                const actions = el('div', 'row-gap');
+                if (conv.myRole === 'OWNER' && member.role === 'MEMBER') {
+                    const promote = el('button', 'pill pill-ok', 'Promote');
+                    promote.type = 'button';
+                    promote.addEventListener('click', () => changeMemberRole(conv.id, member.userId, 'MODERATOR'));
+                    actions.appendChild(promote);
+                }
+                if (conv.myRole === 'OWNER' && member.role === 'MODERATOR') {
+                    const demote = el('button', 'pill pill-mute', 'Demote');
+                    demote.type = 'button';
+                    demote.addEventListener('click', () => changeMemberRole(conv.id, member.userId, 'MEMBER'));
+                    actions.appendChild(demote);
+                }
+                const canRemove = conv.myRole === 'OWNER' || member.role === 'MEMBER';
+                if (canRemove) {
+                    const remove = el('button', 'pill pill-no', 'Remove');
+                    remove.type = 'button';
+                    remove.addEventListener('click', async () => {
+                        const ok = await confirmAction({
+                            title: 'Remove ' + (member.displayName || 'this member') + '?',
+                            message: 'They lose access to this group and its history immediately.',
+                            confirm: 'Remove'
+                        });
+                        if (!ok) return;
+                        try {
+                            await request('/conversations/' + conv.id + '/members/' + member.userId, { method: 'DELETE' });
+                            toast('Member removed');
+                            openGroupManage();
+                        } catch (err) {
+                            toast(err.message);
+                        }
+                    });
+                    actions.appendChild(remove);
+                }
+                if (member.role === 'MEMBER') {
+                    const block = el('button', 'pill pill-no', 'Block');
+                    block.type = 'button';
+                    block.addEventListener('click', async () => {
+                        const ok = await confirmAction({
+                            title: 'Block ' + (member.displayName || 'this member') + '?',
+                            message: 'They are removed from the group and cannot join, request to join or use an invite link.',
+                            confirm: 'Block'
+                        });
+                        if (!ok) return;
+                        try {
+                            await request('/conversations/groups/' + conv.id + '/blocks', {
+                                method: 'POST',
+                                body: JSON.stringify({ userId: member.userId })
+                            });
+                            toast('User blocked from group');
+                            openGroupManage();
+                        } catch (err) {
+                            toast(err.message);
+                        }
+                    });
+                    actions.appendChild(block);
+                }
+                row.appendChild(actions);
+            }
+            list.appendChild(row);
+        });
+
+        $('add-member-btn').hidden = !isAdmin;
+        $('group-delete-btn').hidden = conv.myRole !== 'OWNER';
+        document.querySelectorAll('.group-menu__item[data-gtab="requests"], .group-menu__item[data-gtab="invitations"], .group-menu__item[data-gtab="blocked"], .group-menu__item[data-gtab="links"]')
+            .forEach((item) => { item.hidden = !isAdmin; });
+        if (!isAdmin) switchGroupTab('info');
+
+        if (isAdmin) {
+            try {
+                state.inviteLinks = await request('/conversations/groups/' + conv.id + '/invite-links');
+            } catch (err) {
+                state.inviteLinks = [];
+            }
+            renderInviteLinks(conv.id);
+            try {
+                const joinRequests = await request('/conversations/groups/' + conv.id + '/join-requests');
+                const invitations = await request('/conversations/groups/' + conv.id + '/invitations');
+                renderGroupJoinRequests(joinRequests);
+                renderGroupInvitations(invitations);
+            } catch (err) {
+                console.error('Failed to load join requests/invitations:', err);
+            }
+            try {
+                state.groupBlocked = await request('/conversations/groups/' + conv.id + '/blocks');
+                renderGroupBlocked();
+            } catch (err) {
+                console.error('Failed to load blocked members:', err);
+            }
+        }
+    }
+
+    /** The read half of the group page: the card every member is entitled to. */
+    function renderGroupInfo(group) {
+        setAvatar($('group-avatar'), group.title, group.avatarUrl);
+        $('group-name-view').textContent = group.title;
+        $('group-visibility-view').textContent = group.isPrivate ? 'Private group' : 'Public group';
+        const description = $('group-desc-view');
+        description.hidden = !group.description;
+        description.textContent = group.description || '';
+        const facts = $('group-facts');
+        while (facts.firstChild) facts.removeChild(facts.firstChild);
+        addProfileFact(facts, 'Members', String(group.memberCount));
+        addProfileFact(facts, 'Created', joinedLabel(group.createdAt));
+        addProfileFact(facts, 'Your role', roleLabel(group.myRole));
     }
 
     async function changeMemberRole(groupId, memberId, role) {
@@ -2524,7 +2537,8 @@
                 const mid = el('div');
                 mid.appendChild(el('strong', '', person.displayName));
                 mid.appendChild(el('span', 'muted', '@' + person.username + (person.online ? ' · Online' : '')));
-                attachProfileOpen(row, avatar, mid, person.id, person.displayName);
+                attachRowOpener(row, avatar, mid, 'the profile of ' + person.displayName,
+                    () => openUserProfile(person.id));
                 row.appendChild(friendActionButton(person));
                 list.appendChild(row);
             });
@@ -2602,7 +2616,7 @@
         actions.appendChild(cancel);
     }
 
-    let profileCardToken = 0;
+    let cardSeq = 0;
     let openProfileId = null;
     let presenceTimer = null;
 
@@ -2617,25 +2631,26 @@
         const card = openModal('Profile');
         openProfileId = userId;
         card.body.appendChild(el('div', 'empty', 'Loading profile\u2026'));
-        paintProfileCard(card, userId, ++profileCardToken);
+        paintProfileCard(card, userId, cardSeq);
     }
 
     /**
-     * The token is what makes a late response safe: opening a different card
-     * while this read is in flight must not let the older one paint over it.
+     * The sequence is what makes a late response safe: every modal opened after
+     * this one raises it, so an older read cannot paint over what the user is
+     * now looking at.
      */
     async function paintProfileCard(card, userId, token) {
         let profile;
         try {
             profile = await request('/users/' + userId);
         } catch (err) {
-            if (token === profileCardToken) {
+            if (token === cardSeq) {
                 closeModal();
                 toast(err.message);
             }
             return;
         }
-        if (token !== profileCardToken || $('modal').hidden) return;
+        if (token !== cardSeq || $('modal').hidden) return;
         $('modal-title').textContent = profile.displayName || profile.username;
         renderProfileCard(card, profile);
     }
@@ -2644,7 +2659,7 @@
     function refreshOpenProfile() {
         if (!openProfileId || $('modal').hidden) return;
         paintProfileCard({ body: $('modal-body'), actions: $('modal-actions') },
-            openProfileId, ++profileCardToken);
+            openProfileId, cardSeq);
     }
 
     function renderProfileCard(card, profile) {
@@ -2764,18 +2779,144 @@
     }
 
     /**
-     * Wraps a row's avatar and name in the control that opens that person's
-     * profile. The row itself stays a div: the action pills beside it are
-     * buttons, and a button may not contain one.
+     * Wraps a row's avatar and name in the control that opens its detail card.
+     * The row itself stays a div: the action pills beside it are buttons, and a
+     * button may not contain one.
      */
-    function attachProfileOpen(row, avatar, mid, userId, label) {
+    function attachRowOpener(row, avatar, mid, label, open) {
         const opener = el('button', 'person-open');
         opener.type = 'button';
-        opener.setAttribute('aria-label', 'View the profile of ' + (label || 'this user'));
+        opener.setAttribute('aria-label', 'View ' + label);
         opener.appendChild(avatar);
         opener.appendChild(mid);
-        opener.addEventListener('click', () => openUserProfile(userId));
+        opener.addEventListener('click', open);
         row.appendChild(opener);
+    }
+
+    /**
+     * The group card, read from GET /api/conversations/groups/{id}/profile.
+     * Members get the roster with it. A stranger on a public group gets the same
+     * facts discovery already advertises and no names, and a private group has
+     * answered 403 long before this could show one.
+     */
+    function openGroupProfile(groupId) {
+        const card = openModal('Group');
+        card.body.appendChild(el('div', 'empty', 'Loading group\u2026'));
+        paintGroupCard(card, groupId, cardSeq);
+    }
+
+    async function paintGroupCard(card, groupId, token) {
+        let group;
+        try {
+            group = await request('/conversations/groups/' + groupId + '/profile');
+        } catch (err) {
+            if (token === cardSeq) {
+                closeModal();
+                toast(err.message);
+            }
+            return;
+        }
+        if (token !== cardSeq || $('modal').hidden) return;
+        $('modal-title').textContent = group.title;
+        renderGroupCard(card, group);
+    }
+
+    function renderGroupCard(card, group) {
+        while (card.body.firstChild) card.body.removeChild(card.body.firstChild);
+        while (card.actions.firstChild) card.actions.removeChild(card.actions.firstChild);
+
+        card.body.appendChild(groupIdentity(group));
+        if (group.description) card.body.appendChild(el('p', 'profile-bio', group.description));
+        const facts = el('dl', 'profile-facts');
+        addProfileFact(facts, 'Members', String(group.memberCount));
+        addProfileFact(facts, 'Created', joinedLabel(group.createdAt));
+        addProfileFact(facts, 'Your role', roleLabel(group.myRole));
+        card.body.appendChild(facts);
+        if (group.members.length) {
+            card.body.appendChild(el('div', 'section-label', 'Members'));
+            card.body.appendChild(rosterList(group.members));
+        }
+
+        if (group.membershipStatus === 'MEMBER') {
+            card.actions.appendChild(modalButton('btn btn-primary', 'Open chat', () => {
+                closeModal();
+                openView('chats', { conversationId: group.id });
+            }));
+        } else if (group.membershipStatus === 'PENDING') {
+            card.actions.appendChild(el('span', 'pill pill-mute', 'Request pending'));
+        } else if (group.membershipStatus === 'BLOCKED') {
+            card.actions.appendChild(el('span', 'pill pill-no', 'Blocked in this group'));
+        } else {
+            const label = group.isPrivate ? 'Request to join' : 'Join group';
+            card.actions.appendChild(modalButton('btn btn-primary', label, async () => {
+                const joined = group.isPrivate ? await requestGroupJoin(group) : await joinGroup(group);
+                if (!joined) return;
+                await loadDiscoverGroups();
+                paintGroupCard(card, group.id, cardSeq);
+            }));
+        }
+    }
+
+    /** Picture, name and visibility - shared by the card and the group page. */
+    function groupIdentity(group) {
+        const hero = el('div', 'profile-hero');
+        const frame = el('div', 'avatar-wrap');
+        const avatar = el('div', 'avatar avatar--xl');
+        setAvatar(avatar, group.title, group.avatarUrl);
+        frame.appendChild(avatar);
+        const who = el('div', 'profile-who');
+        who.appendChild(el('strong', '', group.title));
+        who.appendChild(el('span', 'muted', group.isPrivate ? 'Private group' : 'Public group'));
+        hero.appendChild(frame);
+        hero.appendChild(who);
+        return hero;
+    }
+
+    /** Read-only: promoting, removing and blocking live on the group page. */
+    function rosterList(members) {
+        const list = el('div', 'card-list');
+        members.forEach((member) => {
+            const row = el('div', 'card-row');
+            const avatar = el('div', 'avatar');
+            setAvatar(avatar, member.displayName, member.avatarUrl);
+            const mid = el('div');
+            mid.appendChild(el('strong', '', member.displayName || member.username));
+            mid.appendChild(el('span', 'muted', (roleLabel(member.role) || 'Member') + (member.online ? ' \u00B7 Online' : '')));
+            attachRowOpener(row, avatar, mid, 'the profile of ' + (member.displayName || 'a member'),
+                () => openUserProfile(member.userId));
+            list.appendChild(row);
+        });
+        return list;
+    }
+
+    function roleLabel(role) {
+        if (role === 'OWNER') return 'Owner';
+        if (role === 'MODERATOR') return 'Moderator';
+        if (role === 'MEMBER') return 'Member';
+        return '';
+    }
+
+    async function joinGroup(group) {
+        try {
+            await request('/conversations/groups/' + group.id + '/join', { method: 'POST' });
+            toast('Joined group');
+            await loadConversations();
+            return true;
+        } catch (err) {
+            toast(err.message);
+            return false;
+        }
+    }
+
+    async function requestGroupJoin(group) {
+        try {
+            await request('/conversations/groups/' + group.id + '/join-requests', { method: 'POST' });
+            toast('Join request sent');
+            return true;
+        } catch (err) {
+            toast(err.message);
+            return false;
+        }
     }
 
     /**
@@ -2792,18 +2933,20 @@
             loadFriends().catch(() => {});
             if (state.view === 'friends') searchUsers();
             refreshOpenProfile();
-            refreshChatPresence();
+            refreshChatHeader();
         }, 1200);
     }
 
-    /** The dot and the line under a chat's title. Groups have no peer to be online as. */
-    function renderChatPresence(peer) {
+    /** The line under a chat's title, and the dot beside it when the chat is private. */
+    function renderChatHeader(peer) {
         const conv = state.currentConversation;
         if (!conv) return;
         const dot = $('chat-online-dot');
         dot.hidden = true;
         if (isGroup(conv)) {
-            $('chat-subtitle').textContent = conv.memberCount ? conv.memberCount + ' members' : 'Group chat';
+            $('chat-subtitle').textContent = conv.memberCount == null
+                ? 'Group chat'
+                : conv.memberCount + (conv.memberCount === 1 ? ' member' : ' members');
             return;
         }
         $('chat-subtitle').textContent = 'Private chat';
@@ -2812,13 +2955,18 @@
         dot.hidden = !peer.online;
     }
 
-    async function refreshChatPresence() {
+    /**
+     * Live presence for the chat being read. A group has no single peer to be
+     * online as; its member count comes from the roster that opening the chat
+     * already fetches.
+     */
+    async function refreshChatHeader() {
         const conv = state.currentConversation;
         if (!conv || isGroup(conv) || !conv.otherUserId) return;
         try {
             const peer = await request('/users/' + conv.otherUserId);
             if (state.currentConversation !== conv) return;
-            renderChatPresence(peer);
+            renderChatHeader(peer);
         } catch (err) {
             // The header keeps its last known state; the thread is unaffected.
         }

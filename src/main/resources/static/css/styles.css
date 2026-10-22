@@ -304,6 +304,7 @@ ul { list-style: none; }
 .profile-facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; font-size: 13px; }
 .profile-facts dt { color: var(--sub); }
 .profile-facts dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+.group-edit { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); display: grid; gap: 12px; }
 .avatar--xl + .presence { width: 14px; height: 14px; }
 .person-open {
     grid-column: 1 / 3; display: flex; align-items: center; gap: 12px;

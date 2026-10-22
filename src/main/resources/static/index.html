@@ -368,12 +368,22 @@
                 <div class="group-panels">
                     <section class="panel-card group-pane" data-gpane="info">
                         <h3>Group information</h3>
-                        <label class="field"><span>Group name</span><input id="group-title-input" maxlength="100"></label>
-                        <label class="field"><span>Description</span><textarea id="group-desc-input" maxlength="500" rows="3"></textarea></label>
-                        <label class="pref"><span>Private group (join by request only)</span><span class="switch"><input id="group-private-input" type="checkbox"><span class="slider"></span></span></label>
-                        <p id="group-created" class="muted">Created recently</p>
-                        <div class="row-gap">
+                        <div class="profile-hero">
+                            <div class="avatar-wrap"><div id="group-avatar" class="avatar avatar--xl">?</div></div>
+                            <div class="profile-who">
+                                <strong id="group-name-view">Group</strong>
+                                <span id="group-visibility-view" class="muted"></span>
+                            </div>
+                        </div>
+                        <p id="group-desc-view" class="profile-bio" hidden></p>
+                        <dl id="group-facts" class="profile-facts"></dl>
+                        <div id="group-info-edit" class="group-edit" hidden>
+                            <label class="field"><span>Group name</span><input id="group-title-input" maxlength="100"></label>
+                            <label class="field"><span>Description</span><textarea id="group-desc-input" maxlength="500" rows="3"></textarea></label>
+                            <label class="pref"><span>Private group (join by request only)</span><span class="switch"><input id="group-private-input" type="checkbox"><span class="slider"></span></span></label>
                             <button id="group-save-btn" type="button" class="btn btn-primary btn-sm">Save changes</button>
+                        </div>
+                        <div class="row-gap">
                             <button id="group-leave-btn" type="button" class="btn btn-ghost btn-sm">Leave group</button>
                             <button id="group-delete-btn" type="button" class="btn btn-danger btn-sm" hidden>Delete group</button>
                         </div>

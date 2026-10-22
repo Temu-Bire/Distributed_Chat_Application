@@ -132,10 +132,16 @@ class FrontendContractTest {
         assertThat(js)
                 .as("the ways in: the friends and request rows, the people search, the group roster, "
                         + "and the info button of a private chat")
-                .contains("attachProfileOpen(row, avatar, mid, profileIdOf(person),")
-                .contains("attachProfileOpen(row, avatar, mid, person.id, person.displayName);")
-                .contains("attachProfileOpen(row, avatar, mid, member.userId, member.displayName);")
+                .contains("attachRowOpener(row, avatar, mid,")
+                .contains("() => openUserProfile(profileIdOf(person)));")
+                .contains("() => openUserProfile(person.id));")
+                .contains("() => openUserProfile(member.userId));")
                 .contains("else openUserProfile(conv.otherUserId);");
+        assertThat(js)
+                .as("a row that opens a card has to say which card, and the avatar and name move "
+                        + "inside the control so they are clickable and read out together")
+                .contains("opener.setAttribute('aria-label', 'View ' + label);")
+                .contains("row.appendChild(opener);");
         assertThat(js)
                 .as("a request row's own id belongs to the request, so the card has to come from the "
                         + "person on the other side of it")
@@ -152,6 +158,54 @@ class FrontendContractTest {
                         + "status included, so a frame may only trigger a re-read of the REST view")
                 .contains("client.subscribe(DEST.USERS, () => schedulePresenceRefresh());")
                 .doesNotContain("client.subscribe(DEST.USERS, () => {});");
+    }
+
+    @Test
+    @DisplayName("the group card is read from the profile endpoint and only shows the roster it was given")
+    void groupCardsFollowTheServersRosterRules() throws IOException {
+        String js = Files.readString(CHAT_JS, StandardCharsets.UTF_8);
+
+        assertThat(js)
+                .as("both the card and the group page read GET /api/conversations/groups/{id}/profile: "
+                        + "the one endpoint that decides whether this caller gets names")
+                .contains("request('/conversations/groups/' + groupId + '/profile')")
+                .contains("request('/conversations/groups/' + conv.id + '/profile')");
+        assertThat(js)
+                .as("a stranger on a public group is sent an empty roster, so the list has to be "
+                        + "skipped rather than rendered as a heading over nothing")
+                .contains("if (group.members.length) {");
+        assertThat(js)
+                .as("the discover row is a doorway to the card, which is where the description, the "
+                        + "founding date and the membership state are")
+                .contains("attachRowOpener(row, avatar, mid, 'the profile of ' + group.title,")
+                .contains("() => openGroupProfile(group.id));");
+        assertThat(js)
+                .as("joining or asking to join from the card uses the same endpoints as the "
+                        + "discovery list and re-reads it, so the group leaves the list it was found on")
+                .contains("request('/conversations/groups/' + group.id + '/join', { method: 'POST' })")
+                .contains("request('/conversations/groups/' + group.id + '/join-requests', { method: 'POST' })")
+                .contains("await loadDiscoverGroups();");
+        assertThat(js)
+                .as("a private group answers 403 before the card can show a roster, and the modal must "
+                        + "not be left open on an error toast")
+                .containsPattern("(?s)catch \\(err\\) \\{\\s*if \\(token === cardSeq\\) \\{\\s*closeModal\\(\\);")
+                .contains("if (token !== cardSeq || $('modal').hidden) return;");
+        assertThat(js)
+                .as("the chat header counts members from the group's own numbers, and says so in the "
+                        + "singular for a group of one")
+                .contains("conv.memberCount === 1 ? ' member' : ' members'");
+
+        String html = Files.readString(Path.of("src/main/resources/static/index.html"), StandardCharsets.UTF_8);
+        assertThat(html)
+                .as("the group page shows the card as text: the edit form below it is only for the "
+                        + "roles that may save it, so the facts need their own sinks")
+                .contains("id=\"group-name-view\"")
+                .contains("id=\"group-desc-view\"")
+                .contains("id=\"group-facts\"")
+                .contains("id=\"group-info-edit\"");
+        assertThat(js)
+                .as("plain members get the facts, not a form whose Save button would be refused")
+                .contains("$('group-info-edit').hidden = !isAdmin;");
     }
 
     @Test
