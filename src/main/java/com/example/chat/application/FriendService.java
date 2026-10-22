@@ -23,18 +23,18 @@ public class FriendService {
     private final FriendshipRepository friendshipRepository;
     private final FriendRequestRepository friendRequestRepository;
     private final UserRepository userRepository;
-    private final PresenceService presenceService;
+    private final PresencePolicy presencePolicy;
     private final NotificationService notificationService;
 
     public FriendService(FriendshipRepository friendshipRepository,
                          FriendRequestRepository friendRequestRepository,
                          UserRepository userRepository,
-                         PresenceService presenceService,
+                         PresencePolicy presencePolicy,
                          NotificationService notificationService) {
         this.friendshipRepository = friendshipRepository;
         this.friendRequestRepository = friendRequestRepository;
         this.userRepository = userRepository;
-        this.presenceService = presenceService;
+        this.presencePolicy = presencePolicy;
         this.notificationService = notificationService;
     }
 
@@ -205,7 +205,7 @@ public class FriendService {
         for (FriendshipEntity f : list) {
             userRepository.findById(f.getFriendId()).ifPresent(user -> {
                 if (!user.isDeactivated()) {
-                    boolean isOnline = presenceService.isOnline(user.getUsername());
+                    boolean isOnline = presencePolicy.isShownOnline(user);
                     friends.add(new FriendResponse(
                         user.getId(),
                         user.getUsername(),

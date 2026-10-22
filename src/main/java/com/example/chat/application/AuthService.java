@@ -31,16 +31,16 @@ public class AuthService {
     private final UserRepository userRepository;
     private final UserSettingsRepository settingsRepository;
     private final PasswordEncoder passwordEncoder;
-    private final PresenceService presenceService;
+    private final PresencePolicy presencePolicy;
 
     public AuthService(UserRepository userRepository,
                        UserSettingsRepository settingsRepository,
                        PasswordEncoder passwordEncoder,
-                       PresenceService presenceService) {
+                       PresencePolicy presencePolicy) {
         this.userRepository = userRepository;
         this.settingsRepository = settingsRepository;
         this.passwordEncoder = passwordEncoder;
-        this.presenceService = presenceService;
+        this.presencePolicy = presencePolicy;
     }
 
     @Transactional
@@ -170,7 +170,7 @@ public class AuthService {
             PageRequest.of(boundedPage, boundedSize, Sort.by("displayName").ascending())
         );
         return users.map(user -> {
-            boolean isOnline = presenceService.isOnline(user.getUsername());
+            boolean isOnline = presencePolicy.isShownOnline(user);
             return UserSearchResult.from(user, isOnline);
         });
     }

@@ -6,7 +6,6 @@ import com.example.chat.exception.ChatException;
 import com.example.chat.infrastructure.repository.ConversationMemberRepository;
 import com.example.chat.infrastructure.repository.FriendshipRepository;
 import com.example.chat.infrastructure.repository.UserRepository;
-import com.example.chat.infrastructure.repository.UserSettingsRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,23 +24,20 @@ import java.util.UUID;
 public class ProfileQueryService {
 
     private final UserRepository userRepository;
-    private final UserSettingsRepository settingsRepository;
     private final FriendshipRepository friendshipRepository;
     private final ConversationMemberRepository memberRepository;
-    private final PresenceService presenceService;
+    private final PresencePolicy presencePolicy;
     private final FriendService friendService;
 
     public ProfileQueryService(UserRepository userRepository,
-                               UserSettingsRepository settingsRepository,
                                FriendshipRepository friendshipRepository,
                                ConversationMemberRepository memberRepository,
-                               PresenceService presenceService,
+                               PresencePolicy presencePolicy,
                                FriendService friendService) {
         this.userRepository = userRepository;
-        this.settingsRepository = settingsRepository;
         this.friendshipRepository = friendshipRepository;
         this.memberRepository = memberRepository;
-        this.presenceService = presenceService;
+        this.presencePolicy = presencePolicy;
         this.friendService = friendService;
     }
 
@@ -56,10 +52,8 @@ public class ProfileQueryService {
             throw new ChatException(ChatException.USER_NOT_FOUND, "User not found");
         }
 
-        boolean sharesPresence = settingsRepository.findByUserId(targetId)
-            .map(settings -> settings.isOnlineVisibility())
-            .orElse(true);
-        boolean online = sharesPresence && presenceService.isOnline(target.getUsername());
+        boolean sharesPresence = presencePolicy.sharesPresence(targetId);
+        boolean online = presencePolicy.isShownOnline(target);
 
         boolean viewingSelf = viewerId.equals(targetId);
         String friendshipStatus = viewingSelf

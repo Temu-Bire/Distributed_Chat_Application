@@ -31,7 +31,7 @@ public class ConversationService {
     private final GroupBlockRepository groupBlockRepository;
     private final GroupJoinRequestRepository groupJoinRequestRepository;
     private final GroupInvitationRepository groupInvitationRepository;
-    private final PresenceService presenceService;
+    private final PresencePolicy presencePolicy;
     private final NotificationService notificationService;
     private final TransactionTemplate transactionTemplate;
     private final Object[] pairLocks;
@@ -43,7 +43,7 @@ public class ConversationService {
                                GroupBlockRepository groupBlockRepository,
                                GroupJoinRequestRepository groupJoinRequestRepository,
                                GroupInvitationRepository groupInvitationRepository,
-                               PresenceService presenceService,
+                               PresencePolicy presencePolicy,
                                NotificationService notificationService,
                                PlatformTransactionManager transactionManager) {
         this.conversationRepository = conversationRepository;
@@ -53,7 +53,7 @@ public class ConversationService {
         this.groupBlockRepository = groupBlockRepository;
         this.groupJoinRequestRepository = groupJoinRequestRepository;
         this.groupInvitationRepository = groupInvitationRepository;
-        this.presenceService = presenceService;
+        this.presencePolicy = presencePolicy;
         this.notificationService = notificationService;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.pairLocks = new Object[PAIR_LOCK_STRIPES];
@@ -244,7 +244,7 @@ public class ConversationService {
                 user.getAvatarUrl(),
                 m.getRole(),
                 m.getJoinedAt(),
-                presenceService.isOnline(user.getUsername())
+                presencePolicy.isShownOnline(user)
             )));
         }
         return result;
@@ -394,7 +394,7 @@ public class ConversationService {
         UserEntity user = userRepository.findById(targetUserId).orElseThrow();
         return new ConversationMemberResponse(
             user.getId(), user.getUsername(), user.getDisplayName(), user.getAvatarUrl(),
-            target.getRole(), target.getJoinedAt(), presenceService.isOnline(user.getUsername()));
+            target.getRole(), target.getJoinedAt(), presencePolicy.isShownOnline(user));
     }
 
     /**
