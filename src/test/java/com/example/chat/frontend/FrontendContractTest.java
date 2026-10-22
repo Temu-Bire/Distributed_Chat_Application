@@ -240,6 +240,35 @@ class FrontendContractTest {
     }
 
     @Test
+    @DisplayName("the composer offers a picker and takes a picture from paste, drop or paperclip")
+    void composerHasAnEmojiPickerAndThreeUploadDoors() throws IOException {
+        String html = Files.readString(Path.of("src/main/resources/static/index.html"), StandardCharsets.UTF_8);
+        assertThat(html)
+                .as("the popover the script fills, declared in the page so it is in the tab order")
+                .contains("id=\"composer-picker\"");
+
+        String js = Files.readString(CHAT_JS, StandardCharsets.UTF_8);
+        assertThat(js)
+                .as("a handful of emojis, inserted at the caret instead of one hardcoded smiley "
+                        + "glued onto the end of the draft")
+                .contains("COMPOSER_EMOJIS")
+                .contains("insertAtCaret($('message-content-input'), emoji)")
+                .doesNotContain("input.value += '\uD83D\uDE0A'");
+
+        assertThat(js)
+                .as("the paperclip, a paste and a drop all go through the one upload path, and the "
+                        + "window listeners are what stop a dropped file from replacing the app")
+                .contains("$('attach-input').addEventListener('change', chooseAttachment)")
+                .contains("$('message-content-input').addEventListener('paste', onComposerPaste)")
+                .contains("zone.addEventListener('drop'")
+                .contains("window.addEventListener('drop', (event) => event.preventDefault());")
+                .contains("fetch(API + '/uploads/media'");
+        assertThat(js)
+                .as("a pasted picture must not also paste its text form into the draft")
+                .containsPattern("(?s)function onComposerPaste\\(event\\) \\{[^}]*event\\.preventDefault\\(\\);");
+    }
+
+    @Test
     @DisplayName("destructive client actions ask for confirmation before they send the request")
     void destructiveActionsConfirmFirst() throws IOException {
         String js = Files.readString(CHAT_JS, StandardCharsets.UTF_8);

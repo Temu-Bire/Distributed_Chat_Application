@@ -258,7 +258,7 @@ ul { list-style: none; }
 .bubble__text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .bubble__meta { display: flex; justify-content: flex-end; align-items: center; gap: 6px; font-size: 11px; opacity: .72; }
 .bubble__meta .ticks { letter-spacing: -2px; }
-.composer { padding: 12px 16px; background: var(--surface); border-top: 1px solid var(--line); }
+.composer { padding: 12px 16px; background: var(--surface); border-top: 1px solid var(--line); position: relative; }
 .composer__field {
     display: flex; align-items: center; gap: 6px; border: 1px solid var(--line);
     border-radius: 999px; padding: 4px 6px 4px 8px; background: var(--surface);
@@ -566,6 +566,13 @@ ul { list-style: none; }
 .emoji-picker { display: flex; flex-wrap: wrap; gap: 2px; border: 1px solid var(--line); background: var(--surface); border-radius: 12px; padding: 6px; box-shadow: 0 8px 24px rgba(15, 23, 42, .15); width: max-content; }
 .emoji-picker__item { border: 0; background: transparent; font-size: 18px; padding: 4px; border-radius: 8px; cursor: pointer; }
 .emoji-picker__item:hover { background: rgba(37, 99, 235, .12); }
+/* The composer's picker floats over the thread so opening it cannot push the
+   message the person is replying to out of view. */
+.emoji-picker--composer {
+    position: absolute; bottom: 100%; left: 16px; z-index: 6;
+    max-width: calc(100% - 32px);
+}
+.chat-view.is-dragging .chat-thread { outline: 2px dashed var(--primary); outline-offset: -10px; }
 .reply-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 16px; padding: 8px 14px; border: 1px solid var(--line); border-bottom: 0; border-radius: 12px 12px 0 0; background: var(--surface); }
 .reply-bar__info { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 12px; }
 .reply-bar__info span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

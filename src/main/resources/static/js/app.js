@@ -14,6 +14,14 @@
 
     const REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🔥', '🎉', '👀'];
 
+    /** What the composer offers while writing - a wider set than the reactions. */
+    const COMPOSER_EMOJIS = ['😀', '😂', '🥰', '😎', '🤔', '😴', '😭', '😅',
+        '🙌', '👍', '🙏', '👀', '🔥', '🎉', '❤️', '💯'];
+
+    /** The kinds the paperclip, a paste and a drop all accept before the server re-checks. */
+    const UPLOAD_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf'];
+    const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+
     const state = {
         user: null,
         conversations: null,
@@ -2393,17 +2401,17 @@
                 closeChatSearch();
             }
         });
-        $('emoji-btn').addEventListener('click', () => {
-            const input = $('message-content-input');
-            input.value += '😊';
-            input.focus();
-        });
+        buildComposerPicker();
+        wireComposerPickerDismissal();
+        $('emoji-btn').addEventListener('click', toggleComposerPicker);
         $('attach-btn').addEventListener('click', () => $('attach-input').click());
-        $('attach-input').addEventListener('change', uploadAttachment);
+        $('attach-input').addEventListener('change', chooseAttachment);
         $('pending-attachment-remove').addEventListener('click', () => {
             state.pendingAttachment = null;
             renderPendingAttachment();
         });
+        $('message-content-input').addEventListener('paste', onComposerPaste);
+        wireFileDrop();
         document.querySelectorAll('.group-menu__item').forEach((item) => {
             item.addEventListener('click', () => switchGroupTab(item.dataset.gtab));
         });
@@ -3022,13 +3030,25 @@
         $('pending-attachment-name').textContent = attachment.name + ' \u00B7 ' + formatBytes(attachment.size);
     }
 
-    async function uploadAttachment() {
+    /** The paperclip: the chosen file is read from the input, which is then emptied. */
+    async function chooseAttachment() {
         const input = $('attach-input');
         const file = input.files && input.files[0];
-        if (!file) return;
-        if (file.size > 10 * 1024 * 1024) {
+        input.value = '';
+        if (file) await attachFile(file);
+    }
+
+    /**
+     * The one upload path - the paperclip, a paste and a drop all end here, so
+     * a picture cannot arrive through a door that skips the size check.
+     */
+    async function attachFile(file) {
+        if (state.pendingAttachment) {
+            toast('This message already has an attachment - remove it first.');
+            return;
+        }
+        if (file.size > UPLOAD_MAX_BYTES) {
             toast('Files must be 10 MB or smaller.');
-            input.value = '';
             return;
         }
         const data = new FormData();
@@ -3041,9 +3061,106 @@
             renderPendingAttachment();
         } catch (err) {
             toast(err.message);
-        } finally {
-            input.value = '';
         }
+    }
+
+    /** The first clipboard or drop payload the server is willing to take. */
+    function fileFromDataTransfer(data) {
+        if (!data) return null;
+        const items = data.items ? Array.prototype.slice.call(data.items) : [];
+        for (const item of items) {
+            if (item.kind === 'file' && UPLOAD_TYPES.indexOf(item.type) !== -1) return item.getAsFile();
+        }
+        const files = data.files ? Array.prototype.slice.call(data.files) : [];
+        for (const file of files) {
+            if (UPLOAD_TYPES.indexOf(file.type) !== -1) return file;
+        }
+        return null;
+    }
+
+    function carriesAFile(data) {
+        return !!data && !!(data.files && data.files.length);
+    }
+
+    /** A pasted picture becomes an attachment; a pasted sentence stays a sentence. */
+    function onComposerPaste(event) {
+        const file = fileFromDataTransfer(event.clipboardData);
+        if (!file) return;
+        event.preventDefault();
+        attachFile(file);
+    }
+
+    /**
+     * Dropping onto the conversation uploads the file instead of doing what a
+     * browser does by default with a dropped file, which is to open it and throw
+     * the running app - and this session - away. The window listeners are that
+     * guarantee: they cover a drop that misses the conversation area.
+     */
+    function wireFileDrop() {
+        const zone = $('chat-view');
+        window.addEventListener('dragover', (event) => event.preventDefault());
+        window.addEventListener('drop', (event) => event.preventDefault());
+        zone.addEventListener('dragover', (event) => {
+            if (!carriesAFile(event.dataTransfer)) return;
+            event.preventDefault();
+            zone.classList.add('is-dragging');
+        });
+        zone.addEventListener('dragleave', () => zone.classList.remove('is-dragging'));
+        zone.addEventListener('drop', (event) => {
+            if (!carriesAFile(event.dataTransfer)) return;
+            event.preventDefault();
+            zone.classList.remove('is-dragging');
+            const file = fileFromDataTransfer(event.dataTransfer);
+            if (file) {
+                attachFile(file);
+            } else {
+                toast('Only a PNG, JPEG, GIF, WebP or PDF can be shared.');
+            }
+        });
+    }
+
+    /** Built once at startup: the same handful of emojis in every conversation. */
+    function buildComposerPicker() {
+        const picker = $('composer-picker');
+        COMPOSER_EMOJIS.forEach((emoji) => {
+            const btn = el('button', 'emoji-picker__item', emoji);
+            btn.type = 'button';
+            btn.setAttribute('aria-label', 'Insert ' + emoji);
+            btn.addEventListener('click', () => {
+                insertAtCaret($('message-content-input'), emoji);
+                picker.hidden = true;
+            });
+            picker.appendChild(btn);
+        });
+    }
+
+    function toggleComposerPicker() {
+        const picker = $('composer-picker');
+        picker.hidden = !picker.hidden;
+    }
+
+    /** The emoji lands where the caret is, not glued onto the end of the draft. */
+    function insertAtCaret(input, text) {
+        const start = input.selectionStart == null ? input.value.length : input.selectionStart;
+        const end = input.selectionEnd == null ? start : input.selectionEnd;
+        input.value = input.value.slice(0, start) + text + input.value.slice(end);
+        const caret = start + text.length;
+        input.focus();
+        input.setSelectionRange(caret, caret);
+    }
+
+    /** Dismiss the picker the way any popover goes: click away, or press Escape. */
+    function wireComposerPickerDismissal() {
+        const button = $('emoji-btn');
+        document.addEventListener('click', (event) => {
+            const picker = $('composer-picker');
+            if (picker.hidden) return;
+            const inside = picker.contains(event.target) || button.contains(event.target);
+            if (!inside) picker.hidden = true;
+        });
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') $('composer-picker').hidden = true;
+        });
     }
 
     function setupChat() {
