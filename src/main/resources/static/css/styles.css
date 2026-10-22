@@ -208,7 +208,11 @@ ul { list-style: none; }
 
 .workspace { min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
 .workspace-top { display: flex; justify-content: flex-end; padding: 16px 24px; }
-.user-chip { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.user-chip {
+    display: flex; align-items: center; gap: 8px; font-weight: 600;
+    padding: 4px 12px 4px 4px; border: 1px solid transparent; border-radius: 999px;
+}
+.user-chip:hover { background: var(--muted-bg); border-color: var(--line); }
 
 .dashboard { height: 100%; display: flex; flex-direction: column; }
 .dashboard__hero { flex: 1; display: grid; place-content: center; text-align: center; gap: 8px; }

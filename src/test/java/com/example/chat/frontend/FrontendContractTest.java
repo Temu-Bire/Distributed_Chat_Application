@@ -81,6 +81,30 @@ class FrontendContractTest {
     }
 
     @Test
+    @DisplayName("settings can be opened from the profile chip and left again on a small screen")
+    void settingsNavigationIsWiredBothWays() throws IOException {
+        String html = Files.readString(Path.of("src/main/resources/static/index.html"), StandardCharsets.UTF_8);
+        assertThat(html)
+                .as("the profile chip has to be a real button, and it has to keep the two ids the "
+                        + "script writes the signed-in name and picture into")
+                .contains("<button id=\"profile-chip\"")
+                .contains("id=\"top-avatar\"")
+                .contains("id=\"top-name\"");
+        assertThat(html)
+                .as("the bottom rail replaces the sidebar on a phone, so the settings page needs its "
+                        + "own way back that disappears on desktop where the rail is always visible")
+                .containsPattern("(?s)<button id=\"settings-back-btn\"[^>]*class=\"[^\"]*mobile-only[^\"]*\"[^>]*aria-label=");
+
+        String js = Files.readString(CHAT_JS, StandardCharsets.UTF_8);
+        assertThat(js)
+                .as("tapping the profile chip opens settings, and back returns to the conversation "
+                    + "the user was reading rather than dropping them on an empty dashboard")
+                .contains("$('profile-chip').addEventListener('click', () => openView('settings'));")
+                .contains("$('settings-back-btn').addEventListener('click', () => openView('chats', {")
+                .contains("conversationId: state.currentConversation && state.currentConversation.id");
+    }
+
+    @Test
     @DisplayName("the shared modal announces itself as a dialog and is dismissible by keyboard")
     void modalIsAnAccessibleDialog() throws IOException {
         String html = Files.readString(Path.of("src/main/resources/static/index.html"), StandardCharsets.UTF_8);

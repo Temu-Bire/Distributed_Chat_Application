@@ -654,7 +654,7 @@ fragments the chat. It is now merely insufficient rather than broken.
 | Concurrency (`DistributedConcurrencyTest`) | Racing threads claiming a presence name, including mixed case |
 | Concurrency (`ConcurrencyRaceTest`) | Latched thread pools against each check-then-write race in §5.5 — idempotent sends, competing joins, double-accepts, reaction toggles, DM creation — asserting the surviving row counts |
 | Unit (`InMemoryPresenceStoreTest`) | The port's contract: atomicity, lookup, removal |
-| Contract (`FrontendContractTest`) | `app.js` destinations match `MessageRouter`; no HTML sink; page stays zoomable; loading vs empty states exist; the modal is an accessible dialog; every destructive call is preceded by a confirmation |
+| Contract (`FrontendContractTest`) | `app.js` destinations match `MessageRouter`; no HTML sink; page stays zoomable; loading vs empty states exist; the modal is an accessible dialog; the profile chip opens settings and the settings page has a phone-only way back; every destructive call is preceded by a confirmation |
 | Integration (`ChatWebSocketIntegrationTest`) | Real sockets, 2–3 simultaneous clients: presence fan-out, duplicate-name refusal, oversized input, disconnect |
 | Integration (`WebSocketSecurityIntegrationTest`) | Unauthorized connections and non-member subscriptions refused; delivery only to authorized recipients |
 | Integration (`RateLimitIntegrationTest`) | Real HTTP: 429 + `RATE_LIMITED` + `Retry-After` on exhausted login/friend/message budgets; reads unaffected |
@@ -675,7 +675,7 @@ pass trivially if refusals were indistinguishable from successful joins.
 would fail a feature that persists correctly but never crosses nodes, which is
 the failure mode a distributed deployment actually exhibits.
 
-Run everything with `./mvnw.cmd test` (218 tests across 35 classes, all against a
+Run everything with `./mvnw.cmd test` (219 tests across 35 classes, all against a
 throwaway in-memory database; no external services required — the distributed
 tests mock Redis rather than needing a server, and `DataSeederTest` overrides the
 datasource URL so its ten seeded accounts cannot leak into the database the rest

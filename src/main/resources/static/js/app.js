@@ -2338,11 +2338,15 @@
         $('card-group').addEventListener('click', openNewGroupModal);
         $('card-requests').addEventListener('click', () => openView('requests'));
         $('card-settings').addEventListener('click', () => openView('settings'));
+        $('profile-chip').addEventListener('click', () => openView('settings'));
         $('chat-back-btn').addEventListener('click', () => {
             state.currentConversation = null;
             $('app-shell').classList.remove('show-chat');
             openView(state.filter === 'groups' ? 'groups' : 'chats');
         });
+        $('settings-back-btn').addEventListener('click', () => openView('chats', {
+            conversationId: state.currentConversation && state.currentConversation.id
+        }));
         $('group-back-btn').addEventListener('click', () => openView('chats', {
             conversationId: state.currentConversation && state.currentConversation.id
         }));

@@ -182,10 +182,10 @@
         <div id="dashboard-view" class="dashboard">
             <header class="workspace-top">
                 <div></div>
-                <div class="user-chip">
-                    <div id="top-avatar" class="avatar avatar--sm">?</div>
+                <button id="profile-chip" class="user-chip" type="button" aria-label="Open profile settings">
+                    <span id="top-avatar" class="avatar avatar--sm">?</span>
                     <span id="top-name">User</span>
-                </div>
+                </button>
             </header>
             <div class="dashboard__hero">
                 <h1 id="welcome-title">Welcome back!</h1>
@@ -420,7 +420,10 @@
         </div>
 
         <div id="settings-view" class="page" hidden>
-            <header class="page-head"><h1>Profile Settings</h1></header>
+            <header class="page-head">
+                <button id="settings-back-btn" class="icon-btn mobile-only" type="button" aria-label="Back">←</button>
+                <h1>Profile Settings</h1>
+            </header>
             <div class="settings-grid">
                 <section class="panel-card">
                     <div class="profile-hero">
