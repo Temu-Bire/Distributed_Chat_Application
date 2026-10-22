@@ -31,7 +31,9 @@ A single Spring Boot process that:
 - applies fixed-window rate limits to login, registration, friend requests and
   message sends (429 + `Retry-After`),
 - validates uploads by magic bytes, size and generated storage name rather than
-  by the filename or content type the client claimed,
+  by the filename or content type the client claimed, and stores only what its
+  own endpoints returned — a paperclip, a Ctrl+V paste or a drop onto the thread
+  all upload the bytes, and a message can never point at a caller-chosen path,
 - keeps the browser usable through a dropped socket: STOMP 1.1 heartbeats, a
   silence watchdog, capped exponential reconnect, REST catch-up for everything
   missed, and a REST fallback for composer sends,
@@ -389,7 +391,7 @@ the unique constraints are closed deliberately:
 | Duplicate idempotent send (same `clientMessageId` twice concurrently) | `SELECT … FOR UPDATE` on the conversation row before the clientId pre-check + `uq_msg_client_id` |
 | Two admins adding the same member / join-request accepted while being added | Conversation-row or request-row pessimistic lock + `uq_conv_member`, insert guarded by existence check |
 | Double-accept of a join request or group invitation | Lock the request/invitation row first; losers read status ACCEPTED and get `INVALID_COMMAND`; fixed lock order (request → group) prevents deadlock |
-| Reaction toggle race | `SELECT … FOR UPDATE` on the message row + `uq_message_reaction` |
+| Reaction toggle race (one person's replace-or-clear read-modify-write included) | `SELECT … FOR UPDATE` on the message row + `uq_message_reaction` |
 | Simultaneous DM creation in both directions | JVM striped locks (64 stripes, sorted pair hash) around a committed transaction + unique conversation key |
 | Cross-node correctness | Every above defence is single-node; multi-instance needs DB-level arbitration (already provided by the unique constraints — the loser currently surfaces as 409/500) |
 
@@ -414,7 +416,7 @@ thread pools against each scenario and asserts the surviving row count.
 | Profile cards leak nothing they are not for | `GET /api/users/{id}` returns display name, avatar, bio, join date, presence-as-permitted, the caller's friendship status and two counts. There is no email in the payload, a deactivated account is indistinguishable from a missing one, and mutual friends and shared groups are **counted, never listed** — otherwise a public profile becomes a way to enumerate somebody's social graph (`UserProfileIntegrationTest`) |
 | A group's roster belongs to its members | `GET /api/conversations/groups/{id}/profile` answers members with the roster and roles, a stranger on a public group with only the facts discovery already advertises and an empty roster, and a private group you are not in with 403 `NOT_MEMBER` — without echoing its title. Discovery itself selects `isPrivate = false`, so a private group's name and description are never advertising space (`GroupProfileIntegrationTest`) |
 | Sender cannot be spoofed | `senderId` comes from the connection's `Principal`, never from the payload |
-| Upload validation | Type decided by sniffing magic bytes against an allow-list (PNG, JPEG, GIF, WebP, PDF), never by the client's filename or `Content-Type`; per-file size cap applied after the bytes are read; stored under a generated `<prefix>_<uuid>.<ext>` name, with the resolved path re-checked against the upload root; `/uploads/**` requires a session and is served from the same directory the service writes to |
+| Upload validation | Type decided by sniffing magic bytes against an allow-list (PNG, JPEG, GIF, WebP, PDF), never by the client's filename or `Content-Type`; per-file size cap applied after the bytes are read; stored under a generated `<prefix>_<uuid>.<ext>` name, with the resolved path re-checked against the upload root; `/uploads/**` requires a session and is served from the same directory the service writes to. The client's three doors — paperclip, Ctrl+V, drag-drop — share one pre-check, and none of it is trusted: the server re-decides from the bytes |
 | Attachment integrity | The reference stored on the message row is the URL the server generated; a client cannot point a message at an arbitrary path |
 | Forwarding is checked twice | A forward requires membership in the **source** and in the **destination**, so a member of B cannot pull content out of a conversation A they left |
 | Capability tokens | Invite links use a 128-bit `SecureRandom` token carried only in POST bodies, so it never lands in a URL, an access log, or a `Referer`; every unusable state (expired, exhausted, revoked, blocked, already a member) returns the same refusal |
@@ -672,6 +674,8 @@ fragments the chat. It is now merely insufficient rather than broken.
 | 42 | Cards count circles rather than listing them | A profile that listed friends or group members would make a public card into an enumeration tool for somebody else's contacts; two integers answer "how do we know each other" without exposing anyone who did not choose to be seen |
 | 43 | `/` decides from the session, on the server | A view controller cannot branch, and a script that redirects after load shows the marketing page to someone who has already bought it. `PageController` reads the session and either forwards to `landing.html` or redirects to `/app`, so an anonymous crawl and a signed-in bookmark both land where they belong (`LandingPageIntegrationTest`) |
 | 44 | The phone shell's scrolling row is `minmax(0, 1fr)` | A bare `1fr` is `minmax(auto, 1fr)`: it grows to its content, so a tall page pushed the bottom rail below the fold and left no way back. Capping the minimum at 0 keeps the rail pinned and moves the scrolling where it belongs — inside the page |
+| 45 | One reaction per person per message, decided in the service | Stacking 👍❤️🔥 from the same account reads as a ballot, not as a reaction. The rule lives in `toggleReaction` (delete that person's rows, then insert the new emoji) under the message row lock, not in the client, because a client-side rule is a suggestion; `uq_message_reaction (message_id, user_id, emoji)` stays as the backstop. The payload keeps `(emoji, count)` and carries no "reacted by me" flag — the same frame is broadcast to every member, so a per-viewer field in it would be wrong for everyone but its author |
+| 46 | The paperclip, a paste and a drop call one upload function | Three doors that each fetch `/api/uploads/media` means three places that can forget the type allow-list or the size cap. One `attachFile` keeps the checks where a fourth door cannot miss them, and a window-level `preventDefault` on `dragover`/`drop` stops a file dropped beside the thread from navigating the SPA away and taking the session with it |
 
 ---
 
@@ -680,12 +684,12 @@ fragments the chat. It is now merely insufficient rather than broken.
 | Level | Covers |
 |---|---|
 | Unit (`ChatServiceTest`) | Presence rules: join validation, duplicate names, rejoin, leave cleanup, error codes |
-| Unit (`AuthServiceTest`, `FriendServiceTest`, `ConversationServiceTest`, `PersistentMessageServiceTest`, `GroupModerationTest`, `ConversationOwnershipTransferTest`) | Application rules: credentials, friendship state machine, membership/roles, idempotent sends, reactions, blocking, ownership transfer |
+| Unit (`AuthServiceTest`, `FriendServiceTest`, `ConversationServiceTest`, `PersistentMessageServiceTest`, `GroupModerationTest`, `ConversationOwnershipTransferTest`) | Application rules: credentials, friendship state machine, membership/roles, idempotent sends, one reaction per person (clear, replace, leave others' counts alone), blocking, ownership transfer |
 | Unit (`RateLimiterTest`) | Fixed-window budgets, rollover, `Retry-After`, key isolation, disabled-mode, and a 16-thread test proving concurrent traffic shares one budget atomically |
 | Concurrency (`DistributedConcurrencyTest`) | Racing threads claiming a presence name, including mixed case |
 | Concurrency (`ConcurrencyRaceTest`) | Latched thread pools against each check-then-write race in §5.5 — idempotent sends, competing joins, double-accepts, reaction toggles, DM creation — asserting the surviving row counts |
 | Unit (`InMemoryPresenceStoreTest`) | The port's contract: atomicity, lookup, removal |
-| Contract (`FrontendContractTest`) | `app.js` destinations match `MessageRouter`; no HTML sink; page stays zoomable; loading vs empty states exist; the modal is an accessible dialog; the profile chip opens settings and the settings page has a phone-only way back; a person row, the chat header and a group row each open their card, and the card only shows what the endpoint dares to; the phone rail stays inside the viewport on every page; every destructive call is preceded by a confirmation |
+| Contract (`FrontendContractTest`) | `app.js` destinations match `MessageRouter`; no HTML sink; page stays zoomable; loading vs empty states exist; the modal is an accessible dialog; the profile chip opens settings and the settings page has a phone-only way back; a person row, the chat header and a group row each open their card, and the card only shows what the endpoint dares to; the phone rail stays inside the viewport on every page; the composer picker and the paste/drop/paperclip doors all resolve to the one upload function; every destructive call is preceded by a confirmation |
 | Integration (`ChatWebSocketIntegrationTest`) | Real sockets, 2–3 simultaneous clients: presence fan-out, duplicate-name refusal, oversized input, disconnect |
 | Integration (`WebSocketSecurityIntegrationTest`) | Unauthorized connections and non-member subscriptions refused; delivery only to authorized recipients |
 | Integration (`RateLimitIntegrationTest`) | Real HTTP: 429 + `RATE_LIMITED` + `Retry-After` on exhausted login/friend/message budgets; reads unaffected |
@@ -707,7 +711,7 @@ pass trivially if refusals were indistinguishable from successful joins.
 would fail a feature that persists correctly but never crosses nodes, which is
 the failure mode a distributed deployment actually exhibits.
 
-Run everything with `./mvnw.cmd test` (248 tests across 38 classes, all against a
+Run everything with `./mvnw.cmd test` (249 tests across 38 classes, all against a
 throwaway in-memory database; no external services required — the distributed
 tests mock Redis rather than needing a server, and `DataSeederTest` overrides the
 datasource URL so its ten seeded accounts cannot leak into the database the rest

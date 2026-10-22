@@ -35,10 +35,10 @@ The application evolved from an initial single-process Java TCP socket and Swing
 - **Light / Dark Theme:** One-click theme toggle, persisted to the account through `/api/settings`.
 - **Responsive Layout:** Side-by-side desktop view and mobile bottom-tab navigation.
 - **Message Bubbles:** Incoming (left, gray) vs. outgoing (right, blue), with per-message read ticks that advance live when the other side reads.
-- **Real-Time Elements:** Live user search, online indicators, typing dots from the peer, emoji picker, reply previews, reaction pills, and toast alerts.
+- **Real-Time Elements:** Live user search, online indicators, typing dots from the peer, an emoji picker on every message and another above the composer for writing, reply previews, reaction pills, and toast alerts.
 - **Pinned Messages:** A pin bar above the thread lists pinned messages for the conversation and jumps to them.
 - **In-Conversation Search:** A search panel over `GET /api/conversations/{id}/messages/search`, plus "load older" pagination instead of a fixed history window.
-- **File & Image Sharing:** Attachments upload to `/api/uploads/media` and render as an image preview or a named download chip inside the bubble.
+- **File & Image Sharing:** Three ways to put a file on a message — the paperclip, Ctrl+V in the composer, or a drop onto the thread — all of which run the same check and upload to `/api/uploads/media`, then render as an image preview or a named download chip inside the bubble.
 - **Loading & Empty States:** Conversation list and message thread distinguish "still loading" from "genuinely empty"; submit buttons show busy feedback.
 - **Confirmation Dialogs:** Every destructive action (delete message, remove friend, remove or block member, revoke invite link, leave or delete group, remove avatar, log out) goes through an accessible in-app dialog (`role="dialog"`, `aria-modal`, focus trap, Escape = cancel) instead of `window.confirm`.
 - **Resilient Connection:** STOMP 1.1 heartbeats with an inbound-silence watchdog, capped exponential reconnect (1 s → 15 s), REST catch-up of everything missed while offline, and a REST fallback so the composer still sends while the socket is down.
@@ -76,13 +76,13 @@ The application evolved from an initial single-process Java TCP socket and Swing
 - **Relational Storage:** Messages stored in PostgreSQL (or embedded H2) via Spring Data JPA with Flyway schema migration.
 - **Chronological Pagination:** Retrieve conversation history in ordered pages.
 - **Replies:** Threaded replies with a server-supplied preview of the quoted message.
-- **Emoji Reactions:** Toggle per user per emoji, aggregated in every read and broadcast.
+- **Emoji Reactions:** One per person per message, enforced by the server: tapping an emoji attaches it, tapping the same one clears it, and tapping a different one replaces what that person had. Counts aggregate over everyone's picks in every read and broadcast.
 - **Message Editing:** Authors can edit their own sent messages with real-time `edited` indicator.
 - **Soft Deletion:** Authors or group owners can delete messages; content is replaced with `"This message was deleted."` while preserving thread continuity.
 - **Pinning:** Members with permission pin and unpin messages; `GET /api/conversations/{id}/pinned` returns the current pins.
 - **Search:** Case-insensitive substring search restricted to conversations the caller belongs to.
 - **Forwarding:** Server-side copy into another conversation, gated by membership in **both** source and destination so a forward can't leak from a conversation the sender left.
-- **Attachments:** Images and PDFs uploaded through `POST /api/uploads/media`, type-sniffed from magic bytes, size-capped, stored outside the web root with generated names, and referenced from the message row.
+- **Attachments:** Images and PDFs reach `POST /api/uploads/media` from the paperclip, a paste, or a drop; type is sniffed from magic bytes, size is capped, files are stored outside the web root with generated names, and the message row references the upload the server owns.
 - **Typing Indicators:** `POST` to `/app/conversations/{id}/typing` throttles to one frame per 2 s per member and fans out an ephemeral `TYPING` event.
 - **Read Receipts:** `PUT /api/conversations/{id}/read` records the reader's position, broadcasts `READ_UPDATE`, and reports `readByCount` per message.
 - **STOMP Broadcasts:** Conversation events (`NEW_MESSAGE`, `MESSAGE_EDITED`, `MESSAGE_DELETED`, `MESSAGE_REACTED`, `MESSAGE_PINNED`, `READ_UPDATE`, `TYPING`) pushed to subscribers on `/topic/conversations/{id}`, published only after the database commit.
@@ -95,7 +95,7 @@ The application evolved from an initial single-process Java TCP socket and Swing
 
 ### 🔒 Security & Access Control
 - **Rate Limiting:** Fixed-window budgets return 429 + `Retry-After` — login and register per IP, friend requests per user, message sends per sender at one choke point that covers REST **and** STOMP. A retry of an already-persisted send never consumes budget.
-- **Secure Uploads:** Type sniffed from magic bytes against an allow-list (PNG, JPEG, GIF, WebP, PDF), size-capped, stored under a generated name outside the source tree, and served with the type the server chose rather than the one the browser claimed.
+- **Secure Uploads:** Type sniffed from magic bytes against an allow-list (PNG, JPEG, GIF, WebP, PDF), size-capped, stored under a generated name outside the source tree, and served with the type the server chose rather than the one the browser claimed. A missed drop cannot navigate the page away: the window swallows `dragover`/`drop`, and the three client-side doors share one upload function, so no door can skip the type or size check.
 - **Input Validation:** Bean Validation on every request DTO **and** the same rules re-checked inside the services, so a future adapter that skips validation cannot bypass them.
 - **Access Control:** Identity always resolves from the session principal, never the request body; every service re-checks membership and role before reading or writing, which closes the IDOR and privilege-escalation paths.
 - **Session Protection:** Server-side Spring Security session, `changeSessionId()` on login, HttpOnly + SameSite=Lax cookie, `Secure` behind TLS, strict CSP with no `unsafe-*`.
@@ -263,12 +263,12 @@ Run all automated tests with Maven:
 | **`MessageAttachmentTest`** | 4 | Attachment persistence on the message row, magic-byte type sniffing, size rejection, non-member refusal |
 | **`MessageForwardingTest`** | 5 | Forward requires membership in source **and** destination, deleted messages cannot be forwarded, self-forward rejected, forwarded flag set, idempotent retry |
 | **`MessageSearchTest`** | 6 | Case-insensitive substring search, member-only access, limit, blank query, control characters, deleted-message exclusion |
-| **`PersistentMessageServiceTest`** | 13 | Message persistence, conversation summaries, size validation, non-member rejection, replies, emoji reactions, idempotent sends, chronological pagination, author edit verification, unauthorized edit rejection, soft-delete filtering |
+| **`PersistentMessageServiceTest`** | 13 | Message persistence, conversation summaries, size validation, non-member rejection, replies, one reaction per person (same emoji clears, a different one replaces), idempotent sends, chronological pagination, author edit verification, unauthorized edit rejection, soft-delete filtering |
 | **`PinnedMessageTest`** | 7 | Pin/unpin permissions, pin ordering and cap, broadcast of `MESSAGE_PINNED`, non-member refusal |
 | **`ReadReceiptTest`** | 5 | Last-read position, `readByCount` aggregation, `READ_UPDATE` broadcast, non-member refusal, unread count |
 | **`TypingServiceTest`** | 4 | Ephemeral `TYPING` broadcast, non-member refusal, 2 s throttle per member per conversation, independent start/stop throttles |
 | **`UploadServiceTest`** | 6 | Storage path safety, generated names, extension sniffing from magic bytes, oversized rejection, disallowed type rejection, delete of an orphaned file |
-| **`FrontendContractTest`** | 10 | `app.js` pins exactly the server's STOMP destinations, zero `innerHTML` sinks, page stays zoomable and shows loading vs empty states, the modal is an accessible dialog, settings can be opened from the profile chip and left again on a phone, every destructive action confirms before it calls, every person row opens a profile card, the chat header opens the card of whoever is being talked to, the phone rail stays on screen whatever page is open, and both group card and group page read the one endpoint that decides the roster |
+| **`FrontendContractTest`** | 11 | `app.js` pins exactly the server's STOMP destinations, zero `innerHTML` sinks, page stays zoomable and shows loading vs empty states, the modal is an accessible dialog, settings can be opened from the profile chip and left again on a phone, every destructive action confirms before it calls, every person row opens a profile card, the chat header opens the card of whoever is being talked to, the phone rail stays on screen whatever page is open, both group card and group page read the one endpoint that decides the roster, and the composer has a real emoji picker with paste, drop and paperclip all routed through one upload function |
 | **`LandingPageIntegrationTest`** | 5 | `/` serves the landing page to an anonymous visitor and redirects a signed-in one to `/app`, `/app` serves the client, every button resolves to a real route, marketing security claims match enforcement |
 | **`InMemoryPresenceStoreTest`** | 11 | Presence storage contract, case-insensitivity, thread-safe register/unregister atomicity |
 | **`DistributedMessageRelayTest`** | 4 | Redis Pub/Sub envelope contract: a frame published on node A is replayed into node B's broker, the origin node never echoes to itself, and unreadable or destination-less envelopes are ignored |
@@ -288,7 +288,7 @@ Run all automated tests with Maven:
 | **`ChatWebSocketIntegrationTest`** | 4 | Real WebSocket/STOMP frames with 2–3 simultaneous clients: presence fan-out, duplicate-name refusal, oversized input, disconnect |
 | **`NotificationIntegrationTest`** | 13 | Message, mention, reply, friend-request, acceptance, invitation, join-request and join-accepted notifications; preference switches suppressing delivery; per-user topic routing and ownership |
 | **`WebSocketSecurityIntegrationTest`** | 3 | Anonymous and non-member subscription refusals; delivery only to authorized recipients |
-| **Total** | **248** | **100% Passing (0 failures, 0 errors, 0 skipped), 38 test classes** |
+| **Total** | **249** | **100% Passing (0 failures, 0 errors, 0 skipped), 38 test classes** |
 
 ### Running Specific Test Classes
 
@@ -324,10 +324,10 @@ Run all automated tests with Maven:
    - Alice clicks Bob in the friends list, types a message, and presses Enter.
    - Verify: the message appears in both windows in real time via `/topic/conversations/{id}`; Bob's window shows the typing dots while Alice types, and Alice's tick advances once Bob opens the conversation (`READ_UPDATE`).
 6. **Message features:**
-   - React, reply (swipe/hover → Reply), edit and delete a message; each change broadcasts live.
+   - React, reply (swipe/hover → Reply), edit and delete a message; each change broadcasts live. React with 👍 then ❤️ and the pill changes rather than stacks — one emoji per person.
    - Pin a message as Alice (in a group, only owner/moderator can pin) and see it in the pin bar.
    - Search a word in the search panel; use **Load older** to page back through history.
-   - Attach an image from the composer; it renders as a preview for Bob. Forward one of Alice's messages into another conversation.
+   - Attach an image from the composer, by pasting one with Ctrl+V, or by dragging it onto the thread; it renders as a preview for Bob. Use the picker next to the paperclip to write with emoji. Forward one of Alice's messages into another conversation.
 7. **Groups:**
    - Alice creates a group from **My Groups**, invites Bob, and Bob accepts the invitation.
    - As owner, Alice opens **Manage**, creates an invite link, and Carol joins with the token; Alice then revokes the link and a second join attempt is refused.
@@ -459,7 +459,7 @@ To verify that two users connected to **two different application instances** ca
 | `GET` | `/api/conversations/{id}/pinned` | Pinned messages of a conversation | Member |
 | `PUT` | `/api/messages/{msgId}` | Edit existing message | Author only |
 | `DELETE` | `/api/messages/{msgId}` | Soft delete message | Author / Owner |
-| `POST` | `/api/messages/{msgId}/reactions` | Toggle an emoji reaction | Member |
+| `POST` | `/api/messages/{msgId}/reactions` | React with one emoji `{"emoji":"👍"}`; the same emoji clears it, a different one replaces it | Member |
 | `PUT` | `/api/messages/{msgId}/pin` | Pin or unpin `{"pinned":true}` | Any member in a direct chat; in a group, pinning is Owner / Moderator (the author may unpin their own) |
 
 #### Uploads (`/api/uploads`)
