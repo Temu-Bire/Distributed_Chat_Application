@@ -2,6 +2,8 @@ package com.example.chat.application;
 
 import com.example.chat.dto.ErrorResponse;
 import com.example.chat.dto.UserPresenceResponse;
+import com.example.chat.infrastructure.redis.DistributedMessageRelay;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Component;
 
@@ -59,14 +61,27 @@ public class MessageRouter {
     }
 
     private final SimpMessagingTemplate messaging;
+    private final ObjectProvider<DistributedMessageRelay> relayProvider;
 
-    public MessageRouter(SimpMessagingTemplate messaging) {
+    public MessageRouter(SimpMessagingTemplate messaging, ObjectProvider<DistributedMessageRelay> relayProvider) {
         this.messaging = messaging;
+        this.relayProvider = relayProvider;
     }
 
     /** Publishes the user list and join/leave event to every subscriber. */
     public void broadcastPresence(UserPresenceResponse presence) {
         messaging.convertAndSend(TOPIC_USERS, presence);
+        // The payload is a complete snapshot taken from the shared presence
+        // store, so replaying it on another node is correct rather than a
+        // partial delta from one node's point of view.
+        try {
+            DistributedMessageRelay relay = relayProvider != null ? relayProvider.getIfAvailable() : null;
+            if (relay != null) {
+                relay.publishCrossInstance(TOPIC_USERS, presence);
+            }
+        } catch (Exception e) {
+            // A presence hint that fails to fan out is not worth failing a join over.
+        }
     }
 
     /** Delivers a failure to exactly one connection. */
