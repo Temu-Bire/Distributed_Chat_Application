@@ -1,10 +1,13 @@
 package com.example.chat.config;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
 import org.springframework.web.servlet.config.annotation.ViewControllerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+
+import java.nio.file.Paths;
 
 /**
  * HTTP-side configuration.
@@ -19,9 +22,12 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 public class WebConfig implements WebMvcConfigurer {
 
     private final ChatProperties properties;
+    private final String uploadDir;
 
-    public WebConfig(ChatProperties properties) {
+    public WebConfig(ChatProperties properties,
+                     @Value("${app.upload.dir:./uploads}") String uploadDir) {
         this.properties = properties;
+        this.uploadDir = uploadDir;
     }
 
     @Override
@@ -36,8 +42,12 @@ public class WebConfig implements WebMvcConfigurer {
 
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
+        // Must be derived from the same property UploadService writes to: a
+        // hard-coded "./uploads/" would keep storing files where the operator
+        // asked and serve them from somewhere else whenever UPLOAD_DIR is set.
+        String location = Paths.get(uploadDir).toAbsolutePath().normalize().toUri().toString();
         registry.addResourceHandler("/uploads/**")
-                .addResourceLocations("file:./uploads/", "classpath:/static/uploads/");
+                .addResourceLocations(location, "classpath:/static/uploads/");
     }
 
     /**
