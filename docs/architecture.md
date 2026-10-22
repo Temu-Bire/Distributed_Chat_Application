@@ -27,7 +27,7 @@ A single Spring Boot process that:
   (PostgreSQL mode) with Flyway as the sole schema owner (`ddl-auto: validate`),
 - fans out conversation events (`NEW_MESSAGE`, `MESSAGE_EDITED`,
   `MESSAGE_DELETED`, `MESSAGE_REACTED`, `MESSAGE_PINNED`, `READ_UPDATE`,
-  `TYPING`) after commit, and live notifications to a private per-user topic,
+  `CONVERSATION_DELETED`, `TYPING`) after commit, and live notifications to a private per-user topic,
 - applies fixed-window rate limits to login, registration, friend requests and
   message sends (429 + `Retry-After`),
 - validates uploads by magic bytes, size and generated storage name rather than
@@ -208,7 +208,7 @@ nothing about HTTP or WebSocket headers.
 | Destination | Payload | When |
 |---|---|---|
 | `/topic/users` | `UserPresenceResponse` | Any join, leave, or presence change |
-| `/topic/conversations/{id}` | conversation event (`NEW_MESSAGE`, `MESSAGE_EDITED`, `MESSAGE_DELETED`, `MESSAGE_REACTED`, `MESSAGE_PINNED`, `READ_UPDATE`, `TYPING`) | A persisted message changes in a conversation you subscribe to |
+| `/topic/conversations/{id}` | conversation event (`NEW_MESSAGE`, `MESSAGE_EDITED`, `MESSAGE_DELETED`, `MESSAGE_REACTED`, `MESSAGE_PINNED`, `READ_UPDATE`, `CONVERSATION_DELETED`, `TYPING`) | A persisted message changes in a conversation you subscribe to |
 | `/topic/notifications/{userId}` | `NotificationDto` | Something that concerns that one user happened: message, mention, reply, friend request/acceptance, group invite, join request/acceptance — and only if their stored preference for that category allows it |
 | `/user/queue/errors` | `ErrorResponse` | A failure caused by *this* connection |
 
@@ -581,7 +581,7 @@ for idempotent writes.
 
 | Now | Planned |
 |---|---|
-| Relational store: embedded H2 in PostgreSQL mode, Flyway V1–V6 as sole schema owner, `ddl-auto: validate` (missing or extra tables and columns fail boot; permitted-value drift inside a native ENUM column does not — see §6) | Managed PostgreSQL for real deployments |
+| Relational store: embedded H2 in PostgreSQL mode, Flyway V1–V7 as sole schema owner, `ddl-auto: validate` (missing or extra tables and columns fail boot; permitted-value drift inside a native ENUM column does not — see §6) | Managed PostgreSQL for real deployments |
 | `GET /api/conversations/{id}/messages` history behind session auth | Retention and privacy policy for stored content |
 | Write path idempotent on `clientMessageId` | Online schema migrations with expansion/contraction phases |
 | Uploads on the local filesystem under `app.upload.dir`, served from that same directory | Object storage (S3-compatible) with signed URLs; the `.meta` sidecar that records the advertised filename would move with it |
@@ -676,6 +676,8 @@ fragments the chat. It is now merely insufficient rather than broken.
 | 44 | The phone shell's scrolling row is `minmax(0, 1fr)` | A bare `1fr` is `minmax(auto, 1fr)`: it grows to its content, so a tall page pushed the bottom rail below the fold and left no way back. Capping the minimum at 0 keeps the rail pinned and moves the scrolling where it belongs — inside the page |
 | 45 | One reaction per person per message, decided in the service | Stacking 👍❤️🔥 from the same account reads as a ballot, not as a reaction. The rule lives in `toggleReaction` (delete that person's rows, then insert the new emoji) under the message row lock, not in the client, because a client-side rule is a suggestion; `uq_message_reaction (message_id, user_id, emoji)` stays as the backstop. The payload keeps `(emoji, count)` and carries no "reacted by me" flag — the same frame is broadcast to every member, so a per-viewer field in it would be wrong for everyone but its author |
 | 46 | The paperclip, a paste and a drop call one upload function | Three doors that each fetch `/api/uploads/media` means three places that can forget the type allow-list or the size cap. One `attachFile` keeps the checks where a fourth door cannot miss them, and a window-level `preventDefault` on `dragover`/`drop` stops a file dropped beside the thread from navigating the SPA away and taking the session with it |
+| 47 | "Clear this chat for me" is one timestamp per member, not a hidden flag or a delete | `conversation_members.cleared_at` plus `historyCutoff()` gives every read (`findRecentMessages`, pins, search, unread) a lower bound, and the list query hides a chat only while `lastMessageAt <= clearedAt` — so no second "hidden" column can drift out of sync, and the chat revives itself the moment anyone writes in it. Nothing is destroyed, which is the only way this can be true for one member and untouched for the others. The reads bind the epoch rather than `NULL` (`(:after IS NULL OR …)` was the alternative) because Hibernate cannot infer the type of a null parameter, and `mapToSummary` blanks the shared `last_message_text` preview below the cutoff, otherwise a cleared chat would still quote the message it is supposed to have forgotten |
+| 48 | A bulk operation decides once, for the whole selection | `deleteMessagesBulk` and `forwardMessagesBulk` walk the entire id list before writing anything, so a selection containing one message you may not delete (or one from a conversation you are not in) is refused with 403/404 and leaves the thread exactly as it was — a half-applied batch is the worst outcome for an action the user cannot see the middle of. Deletion reuses the single-message `tombstone` path so bulk and one-off cannot diverge in what they clear (replies, reactions, `MESSAGE_DELETED` frame), and forwarding stamps `"<batchId>:<sourceUuid>"` into `client_message_id` (widened to 128 in V7) so a retried batch deduplicates per copy while each copy still costs one rate-limit token |
 
 ---
 
@@ -711,7 +713,7 @@ pass trivially if refusals were indistinguishable from successful joins.
 would fail a feature that persists correctly but never crosses nodes, which is
 the failure mode a distributed deployment actually exhibits.
 
-Run everything with `./mvnw.cmd test` (249 tests across 38 classes, all against a
+Run everything with `./mvnw.cmd test` (278 tests across 41 classes, all against a
 throwaway in-memory database; no external services required — the distributed
 tests mock Redis rather than needing a server, and `DataSeederTest` overrides the
 datasource URL so its ten seeded accounts cannot leak into the database the rest

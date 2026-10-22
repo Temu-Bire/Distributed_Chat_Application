@@ -82,10 +82,12 @@ The application evolved from an initial single-process Java TCP socket and Swing
 - **Pinning:** Members with permission pin and unpin messages; `GET /api/conversations/{id}/pinned` returns the current pins.
 - **Search:** Case-insensitive substring search restricted to conversations the caller belongs to.
 - **Forwarding:** Server-side copy into another conversation, gated by membership in **both** source and destination so a forward can't leak from a conversation the sender left.
+- **Message Selection:** A chat's ⋮ menu enters a selection mode where one, several or every loaded message can be ticked, then forwarded or deleted as one batch. The Delete control is only offered when the server would accept the whole selection — your own messages, or anyone's when you own or moderate the group — and a refused batch changes nothing.
+- **Clear a chat for me / delete it for everyone:** Two different questions. `POST /api/conversations/{id}/clear` moves a per-member cutoff to now, hiding the history from the caller and dropping the chat from their list until someone writes in it — the other members lose nothing. `DELETE /api/conversations/{id}` destroys the conversation and every message in it: either participant of a direct chat may do it, a group only its owner, and every peer's open client learns from the `CONVERSATION_DELETED` frame.
 - **Attachments:** Images and PDFs reach `POST /api/uploads/media` from the paperclip, a paste, or a drop; type is sniffed from magic bytes, size is capped, files are stored outside the web root with generated names, and the message row references the upload the server owns.
 - **Typing Indicators:** `POST` to `/app/conversations/{id}/typing` throttles to one frame per 2 s per member and fans out an ephemeral `TYPING` event.
 - **Read Receipts:** `PUT /api/conversations/{id}/read` records the reader's position, broadcasts `READ_UPDATE`, and reports `readByCount` per message.
-- **STOMP Broadcasts:** Conversation events (`NEW_MESSAGE`, `MESSAGE_EDITED`, `MESSAGE_DELETED`, `MESSAGE_REACTED`, `MESSAGE_PINNED`, `READ_UPDATE`, `TYPING`) pushed to subscribers on `/topic/conversations/{id}`, published only after the database commit.
+- **STOMP Broadcasts:** Conversation events (`NEW_MESSAGE`, `MESSAGE_EDITED`, `MESSAGE_DELETED`, `MESSAGE_REACTED`, `MESSAGE_PINNED`, `READ_UPDATE`, `CONVERSATION_DELETED`, `TYPING`) pushed to subscribers on `/topic/conversations/{id}`, published only after the database commit.
 
 ### 🔔 Real-Time Notifications
 - **Per-User Private Topic:** `/topic/notifications/{userId}`, enforced by the STOMP subscription guard so only that user's own session can subscribe.
@@ -255,7 +257,9 @@ Run all automated tests with Maven:
 | **`ConcurrencyRaceTest`** | 7 | Latched thread pools racing each check-then-write path: idempotent duplicate sends, competing group joins, join-request vs admin add, simultaneous DM creation both directions, reaction toggle races, double-accept of a join request |
 | **`ConversationOwnershipTransferTest`** | 2 | Group ownership transfer rules |
 | **`ConversationServiceTest`** | 8 | Direct conversation creation, idempotency, self-chat prevention, group creation with owner role, member additions and removals, RBAC permissions, voluntary leave, archiving |
-| **`CrossInstanceFanoutTest`** | 10 | Every cluster-visible event reaches `DistributedMessageRelay` with the correct destination and payload: new message, edit, delete, reaction, pin, read receipt, typing, forward, notification, presence join — with a mocked relay so no Redis is needed |
+| **`CrossInstanceFanoutTest`** | 12 | Every cluster-visible event reaches `DistributedMessageRelay` with the correct destination and payload: new message, edit, delete, reaction, pin, read receipt, typing, forward, notification, presence join, one frame per message of a bulk delete, and `CONVERSATION_DELETED` — with a mocked relay so no Redis is needed |
+| **`ChatClearAndDeleteTest`** | 7 | The two kinds of "delete this chat": clearing hides the history behind the caller's cutoff only, the chat leaves the list and revives on the next message, search/pins/unread all honour the cutoff while the peer's unread count is untouched, clearing needs membership and destroys nothing, either participant can destroy a direct chat, a group may only be destroyed by its owner, a stranger is refused |
+| **`BulkMessageOperationTest`** | 9 | Bulk delete of your own selection, refusal of a batch containing a peer's message (nothing in it is deleted), moderator deleting anyone's, a foreign-conversation id refusing the batch, already-deleted ids skipped, bulk forward copying content and flag, per-copy idempotency on a retried batch id, forwarding from a conversation you are not in, forwarding into one |
 | **`DistributedConcurrencyTest`** | 1 | Race-condition testing across presence store operations |
 | **`FriendServiceTest`** | 9 | Friend request send/accept/reject/cancel, paired friendship rows, removal, status lookups, request messages |
 | **`GroupInviteLinkTest`** | 20 | Token entropy/format, expiry and use limits, revoke, blocking, duplicate membership, uniform refusal of every unusable state, private-group join via link, admin-only creation |
@@ -268,7 +272,7 @@ Run all automated tests with Maven:
 | **`ReadReceiptTest`** | 5 | Last-read position, `readByCount` aggregation, `READ_UPDATE` broadcast, non-member refusal, unread count |
 | **`TypingServiceTest`** | 4 | Ephemeral `TYPING` broadcast, non-member refusal, 2 s throttle per member per conversation, independent start/stop throttles |
 | **`UploadServiceTest`** | 6 | Storage path safety, generated names, extension sniffing from magic bytes, oversized rejection, disallowed type rejection, delete of an orphaned file |
-| **`FrontendContractTest`** | 11 | `app.js` pins exactly the server's STOMP destinations, zero `innerHTML` sinks, page stays zoomable and shows loading vs empty states, the modal is an accessible dialog, settings can be opened from the profile chip and left again on a phone, every destructive action confirms before it calls, every person row opens a profile card, the chat header opens the card of whoever is being talked to, the phone rail stays on screen whatever page is open, both group card and group page read the one endpoint that decides the roster, and the composer has a real emoji picker with paste, drop and paperclip all routed through one upload function |
+| **`FrontendContractTest`** | 13 | `app.js` pins exactly the server's STOMP destinations, zero `innerHTML` sinks, page stays zoomable and shows loading vs empty states, the modal is an accessible dialog, settings can be opened from the profile chip and left again on a phone, every destructive action confirms before it calls, every person row opens a profile card, the chat header opens the card of whoever is being talked to, the phone rail stays on screen whatever page is open, both group card and group page read the one endpoint that decides the roster, the composer has a real emoji picker with paste, drop and paperclip all routed through one upload function, selection mode reaches the bulk routes and only offers Delete where the server would allow it, and clearing a chat for me stays visibly a different choice from destroying it for everyone |
 | **`LandingPageIntegrationTest`** | 5 | `/` serves the landing page to an anonymous visitor and redirects a signed-in one to `/app`, `/app` serves the client, every button resolves to a real route, marketing security claims match enforcement |
 | **`InMemoryPresenceStoreTest`** | 11 | Presence storage contract, case-insensitivity, thread-safe register/unregister atomicity |
 | **`DistributedMessageRelayTest`** | 4 | Redis Pub/Sub envelope contract: a frame published on node A is replayed into node B's broker, the origin node never echoes to itself, and unreadable or destination-less envelopes are ignored |
@@ -276,6 +280,7 @@ Run all automated tests with Maven:
 | **`FullE2EChatJourneyTest`** | 1 | Register → friend → direct chat → message journey over REST |
 | **`GroupInviteLinkRestTest`** | 7 | Invite-link REST surface: create, list, revoke, preview, join, and the failure statuses over HTTP |
 | **`GroupProfileIntegrationTest`** | 10 | The group card over HTTP: a member reads the roster with roles, the owner's card says so, a stranger on a public group gets the facts and no names, a private group is refused without echoing its title, pending and blocked states show themselves, discovery advertises public groups only, a direct chat has no card, an unknown id is 404, anonymous is rejected |
+| **`MessageSelectionRestTest`** | 9 | The HTTP shape of the selection UI: a bulk delete reports its count and leaves tombstones, 403 on a batch holding a peer's message, 400 on an empty or 101-id selection, 403 for a stranger, `bulk-forward` returning 201 with both copies, `/clear` emptying my history and list then returning the chat with its first new message, `DELETE /{id}` from either side of a direct chat, 200 for a group owner and 403 for a member who is not one |
 | **`HealthEndpointIntegrationTest`** | 2 | HTTP GET `/api/health` verifying health status reporting |
 | **`OnlineVisibilityTest`** | 5 | `Show online status` checked across the four surfaces that display presence — friends row, search result, group roster, profile card: sharing looks online everywhere, hiding turns all four off, a hidden status reads as private rather than offline, sharing again restores it, and an account that is simply away is offline but still sharing |
 | **`UserProfileIntegrationTest`** | 9 | `GET /api/users/{id}` over HTTP: handle, bio and joined date reach the caller, the response never carries the target's email, friendship state travels with the card, presence is reported only while the target shares it, shared circles are counted rather than listed, a deactivated account is indistinguishable from a missing one, your own card reports `SELF` with no circles, a non-UUID id is rejected before it reaches the database, and an anonymous caller reads nothing |
@@ -288,7 +293,7 @@ Run all automated tests with Maven:
 | **`ChatWebSocketIntegrationTest`** | 4 | Real WebSocket/STOMP frames with 2–3 simultaneous clients: presence fan-out, duplicate-name refusal, oversized input, disconnect |
 | **`NotificationIntegrationTest`** | 13 | Message, mention, reply, friend-request, acceptance, invitation, join-request and join-accepted notifications; preference switches suppressing delivery; per-user topic routing and ownership |
 | **`WebSocketSecurityIntegrationTest`** | 3 | Anonymous and non-member subscription refusals; delivery only to authorized recipients |
-| **Total** | **249** | **100% Passing (0 failures, 0 errors, 0 skipped), 38 test classes** |
+| **Total** | **278** | **100% Passing (0 failures, 0 errors, 0 skipped), 41 test classes** |
 
 ### Running Specific Test Classes
 
@@ -421,7 +426,8 @@ To verify that two users connected to **two different application instances** ca
 | `DELETE` | `/api/conversations/{id}/members/{memberId}` | Remove a member | Owner / Moderator |
 | `POST` | `/api/conversations/{id}/leave` | Leave the conversation | Member |
 | `PUT` | `/api/conversations/{id}` | Update group title, description, avatar, privacy | Owner / Moderator |
-| `DELETE` | `/api/conversations/{id}` | Delete group conversation | Owner only |
+| `DELETE` | `/api/conversations/{id}` | Delete the conversation, every message in it, for everyone. Irreversible | Direct chat: either participant; Group: Owner only |
+| `POST` | `/api/conversations/{id}/clear` | Clear the chat **for the caller only**: hides the history behind a per-member cutoff and drops the chat from the list until someone writes in it. Nothing is destroyed and no other member is affected | Member |
 | `PUT` | `/api/conversations/{id}/archive?archive=true` | Archive or unarchive conversation | Member |
 | `PUT` | `/api/conversations/{id}/read` | Mark read; records position and broadcasts `READ_UPDATE` | Member |
 | `PUT` | `/api/conversations/groups/{id}/members/{userId}/role?role=` | Change a member's role | Owner only |
@@ -455,6 +461,8 @@ To verify that two users connected to **two different application instances** ca
 | `GET` | `/api/conversations/{id}/messages?page=&size=` | Paginate history, newest page first, chronologically ordered | Member |
 | `POST` | `/api/conversations/{id}/messages` | Send message; accepts `replyToId`, optional `attachment`, and idempotent `clientMessageId`; rate limited per sender | Member |
 | `POST` | `/api/conversations/{id}/messages/forward` | Copy an existing message here `{"messageId":"…","clientMessageId":"…"}` | Member of source **and** destination |
+| `POST` | `/api/conversations/{id}/messages/bulk-forward` | Copy a selection of messages here `{"messageIds":[…],"clientMessageId":"batch"}`; each copy costs one rate-limit token and the batch id is extended per message, so a retried batch cannot duplicate | Member of the destination **and** of every source |
+| `POST` | `/api/conversations/{id}/messages/bulk-delete` | Soft delete a selection `{"messageIds":[…]}` (1–100). The whole batch is checked before anything is written, so one message you may not delete refuses the whole selection | Author of every message, or Group Owner / Moderator |
 | `GET` | `/api/conversations/{id}/messages/search?q=&limit=` | Substring search within one conversation | Member |
 | `GET` | `/api/conversations/{id}/pinned` | Pinned messages of a conversation | Member |
 | `PUT` | `/api/messages/{msgId}` | Edit existing message | Author only |
@@ -491,7 +499,7 @@ Uploads are type-sniffed from magic bytes (PNG, JPEG, GIF, WebP, PDF only), capp
 | | `/app/conversations/{id}/send` | Send a message into a persisted conversation | `{"content": "Hello!", "replyToId": "<uuid|null>", "clientMessageId": "<uuid>"}` — `clientMessageId` makes retries idempotent; the server assigns sender and timestamps |
 | | `/app/conversations/{id}/typing` | Announce typing state | `{"typing": true}` — throttled server-side to one frame per member per 2 s |
 | **Server → Client** | `/topic/users` | Presence changes & online list | `UserPresenceResponse`: the join/leave event **and** the complete sorted online list |
-| | `/topic/conversations/{id}` | Persistent conversation events | `NEW_MESSAGE`, `MESSAGE_EDITED`, `MESSAGE_DELETED`, `MESSAGE_REACTED`, `MESSAGE_PINNED`, `READ_UPDATE`, `TYPING` — published only after the DB commit; subscriptions are refused (403) for non-members |
+| | `/topic/conversations/{id}` | Persistent conversation events | `NEW_MESSAGE`, `MESSAGE_EDITED`, `MESSAGE_DELETED`, `MESSAGE_REACTED`, `MESSAGE_PINNED`, `READ_UPDATE`, `CONVERSATION_DELETED`, `TYPING` — published only after the DB commit; subscriptions are refused (403) for non-members |
 | | `/topic/notifications/{userId}` | Live notifications for one user | `NotificationDto{type, category, actorId, actorUsername, conversationId, messageId, title, body, createdAt}` — a topic (not `/user/queue`) so the cross-instance relay can carry it; `StompSubscriptionGuard` refuses any session that is not that user |
 | | `/user/queue/errors` | Error notifications | `{"code": "...", "message": "..."}` |
 
@@ -551,7 +559,7 @@ Configure via environment variables or in `src/main/resources/application.yml`:
     │   │   └── websocket/              # STOMP controllers and connection event listeners
     │   └── resources/
     │       ├── application.yml         # Application configuration
-    │       ├── db/migration/           # Flyway SQL schema migrations V1–V6 (sole schema owner)
+    │       ├── db/migration/           # Flyway SQL schema migrations V1–V7 (sole schema owner)
     │       └── static/                 # ChatSphere vanilla web frontend
     │           ├── landing.html        # Marketing landing page served at /
     │           ├── index.html          # Chat layout and modals (served at /app)
