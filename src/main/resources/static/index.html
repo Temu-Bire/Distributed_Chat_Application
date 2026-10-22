@@ -240,6 +240,9 @@
                 <button id="chat-info-btn" class="icon-btn" type="button" aria-label="Conversation info">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
                 </button>
+                <button id="chat-more-btn" class="icon-btn" type="button" aria-label="Chat actions" aria-haspopup="dialog">
+                    <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="12" cy="5" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="12" cy="19" r="1.8"></circle></svg>
+                </button>
             </header>
             <div id="chat-search" class="chat-search" hidden>
                 <input id="chat-search-input" type="search" placeholder="Search in this conversation" aria-label="Search messages in this conversation">
@@ -249,6 +252,15 @@
             <div id="chat-pinned" class="pinned-bar" role="status" hidden></div>
             <div id="chat-typing" class="typing-bar" role="status" aria-live="polite" hidden></div>
             <div id="chat-messages" class="chat-thread" aria-live="polite"></div>
+            <div id="selection-bar" class="selection-bar" role="toolbar" aria-label="Selected messages" hidden>
+                <span id="selection-count" class="selection-bar__count" aria-live="polite">0 selected</span>
+                <div class="selection-bar__actions">
+                    <button id="selection-all-btn" type="button" class="pill">Select all</button>
+                    <button id="selection-forward-btn" type="button" class="pill">Forward</button>
+                    <button id="selection-delete-btn" type="button" class="pill pill--danger">Delete</button>
+                    <button id="selection-cancel-btn" type="button" class="icon-btn" aria-label="Cancel selection">&#10005;</button>
+                </div>
+            </div>
             <div id="reply-bar" class="reply-bar" hidden>
                 <div class="reply-bar__info">
                     <strong id="reply-bar-author">Replying</strong>

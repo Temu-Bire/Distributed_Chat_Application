@@ -289,6 +289,105 @@ class FrontendContractTest {
         });
     }
 
+    @Test
+    @DisplayName("selecting messages reaches the bulk endpoints and only offers delete it can send")
+    void messageSelectionDrivesTheBulkEndpoints() throws IOException {
+        String html = Files.readString(Path.of("src/main/resources/static/index.html"), StandardCharsets.UTF_8);
+        assertThat(html)
+                .as("the bar the script fills, and every control in it declared in the page so they "
+                        + "are in the tab order and named before they are wired")
+                .contains("id=\"selection-bar\" class=\"selection-bar\" role=\"toolbar\"")
+                .contains("id=\"selection-count\"")
+                .contains("id=\"selection-all-btn\"")
+                .contains("id=\"selection-forward-btn\"")
+                .contains("id=\"selection-delete-btn\"")
+                .contains("id=\"selection-cancel-btn\"")
+                .contains("id=\"chat-more-btn\"");
+
+        String js = Files.readString(CHAT_JS, StandardCharsets.UTF_8);
+        assertThat(js)
+                .as("the header entry point and the four bar controls")
+                .contains("$('chat-more-btn').addEventListener('click', openChatActionsModal);")
+                .contains("$('selection-all-btn').addEventListener('click', toggleSelectAll);")
+                .contains("$('selection-forward-btn').addEventListener('click', () => {")
+                .contains("$('selection-delete-btn').addEventListener('click', deleteSelectedMessages);")
+                .contains("$('selection-cancel-btn').addEventListener('click', exitSelectionMode);")
+                .contains("$('chat-back-btn').addEventListener('click', () => {\n            exitSelectionMode();");
+
+        assertThat(js)
+                .as("the two batch routes the server exposes, and the one conversation route")
+                .contains("request('/conversations/' + conv.id + '/messages/bulk-delete'")
+                .contains("request('/conversations/' + conv.id + '/messages/bulk-forward'")
+                .contains("request('/conversations/' + conv.id + '/clear'");
+
+        assertThat(js)
+                .as("the delete control is gated by the same rule the server enforces: your own "
+                        + "messages, or anyone's when you own or moderate the group")
+                .contains("return String(msg.senderId) === String(state.user.id) || isAdminConversation(conv);")
+                .contains("const canDelete = picked.length > 0 && picked.every(canDeleteMessage);")
+                .contains("remove.disabled = !canDelete;");
+
+        assertThat(js)
+                .as("tombstones cannot be selected, and a batch is sent in the ids the user ticked")
+                .contains("(state.messages.get(conv.id) || []).filter((msg) => !msg.deleted)")
+                .contains("messageIds: picked.map((msg) => msg.id)");
+
+        assertThat(js)
+                .as("a selected row is a checkbox for a screen reader and Escape leaves the mode")
+                .contains("row.setAttribute('role', 'checkbox');")
+                .contains("row.setAttribute('aria-checked',")
+                .contains("if (event.key === 'Escape' && state.selection.active) exitSelectionMode();");
+
+        String css = Files.readString(STYLES_CSS, StandardCharsets.UTF_8);
+        assertThat(css)
+                .as("in selection mode the hover row would compete with the tap target, so it is off")
+                .contains(".msg-row--selectable .msg-actions { display: none !important; }");
+    }
+
+    @Test
+    @DisplayName("clearing a chat for me and deleting it for everyone stay two different things")
+    void chatClearAndDeleteAreDistinctChoices() throws IOException {
+        String js = Files.readString(CHAT_JS, StandardCharsets.UTF_8);
+
+        assertThat(js)
+                .as("both are offered from the chat header, and each says what it costs")
+                .contains("addAction('Clear this chat for me',")
+                .contains("addAction('Delete this chat for everyone',")
+                .contains("'Hide the history in this list for you alone; a new message brings the chat back'");
+
+        assertThat(js)
+                .as("clearing is local-only: nothing is fetched back for the caller and the chat is "
+                        + "expected to reappear, so the conversation row must not be destroyed client side")
+                .contains("function dropLocalHistory(conversationId) {")
+                .contains("state.messages.delete(conversationId);")
+                .contains("state.currentConversation = null;\n            $('app-shell').classList.remove('show-chat');\n            await loadConversations();");
+
+        assertThat(js)
+                .as("the destructive confirmation names the blast radius instead of a generic question")
+                .contains("Every message ever sent here is destroyed and cannot be restored. ' + scope")
+                .contains("will be gone for both of you.'");
+
+        assertThat(js)
+                .as("a group may only be deleted by its owner, so the entry is disabled for everyone else")
+                .contains("if (isGroup(conv) && conv.myRole !== 'OWNER') {")
+                .contains("'Only the group owner can delete a group', null);");
+
+        assertThat(js)
+                .as("the peer's client learns about the deletion from the durable frame and drops the chat")
+                .contains("frame.event === 'CONVERSATION_DELETED'")
+                .contains("forgetConversation(gone);");
+
+        assertThat(js)
+                .as("a frame for a conversation already forgotten must not fire a second goodbye")
+                .contains("const stillMine = (state.conversations || []).some((item) => String(item.id) === String(gone));");
+        assertThat(js)
+                .as("the frame that echoes this browser's own delete must not be read as someone "
+                        + "else destroying the chat")
+                .contains("const askedForIt = String(selfDeletedConversationId) === String(gone);")
+                .contains("if (!askedForIt) {")
+                .contains("selfDeletedConversationId = chat.id;");
+    }
+
     /** Destructive requests the user can fire off from the page, and what each one costs. */
     private static Map<String, String> destructiveCalls() {
         Map<String, String> calls = new LinkedHashMap<>();
@@ -299,6 +398,9 @@ class FrontendContractTest {
         calls.put("await request('/conversations/groups/' + conv.id + '/blocks', {", "blocking a member");
         calls.put("await request('/conversations/groups/' + groupId + '/invite-links/' + link.id, { method: 'DELETE' });", "revoking an invite link");
         calls.put("await request('/conversations/' + conv.id + '/leave', { method: 'POST' });", "leaving a group");
+        calls.put("await request('/conversations/' + conv.id + '/messages/bulk-delete', {", "bulk deleting selected messages");
+        calls.put("await request('/conversations/' + conv.id + '/clear', { method: 'POST', body: '{}' });", "clearing a chat for yourself");
+        calls.put("await request('/conversations/' + chat.id, { method: 'DELETE' });", "deleting a chat for everyone");
         calls.put("await request('/conversations/' + conv.id, { method: 'DELETE' });", "deleting a group");
         calls.put("await request('/auth/logout', { method: 'POST', body: '{}' });", "logging out");
         return calls;

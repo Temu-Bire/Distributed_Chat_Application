@@ -47,6 +47,7 @@
         pinned: [],
         search: { open: false, query: '', results: null, conversationId: null, timer: null },
         pages: {},
+        selection: { active: false, ids: [] },
         pendingAttachment: null,
         inviteLinks: [],
         notifications: [],
@@ -477,7 +478,24 @@
             });
             if (reactions.firstChild) bubble.appendChild(reactions);
             row.appendChild(bubble);
-            if (!msg.deleted) {
+            const selectable = state.selection.active && !msg.deleted;
+            if (selectable) {
+                row.classList.add('msg-row--selectable');
+                if (state.selection.ids.indexOf(msg.id) >= 0) row.classList.add('msg-row--selected');
+                if (!canDeleteMessage(msg)) row.classList.add('msg-row--undeletable');
+                row.setAttribute('role', 'checkbox');
+                row.setAttribute('aria-checked',
+                    String(state.selection.ids.indexOf(msg.id) >= 0));
+                row.tabIndex = 0;
+                row.addEventListener('click', () => toggleMessageSelection(msg));
+                row.addEventListener('keydown', (event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        toggleMessageSelection(msg);
+                    }
+                });
+            }
+            if (!msg.deleted && !state.selection.active) {
                 const actions = el('div', 'msg-actions');
                 const reply = el('button', 'msg-action', 'Reply');
                 reply.type = 'button';
@@ -628,6 +646,298 @@
 
     function isAdminConversation(conv) {
         return !!conv && (conv.myRole === 'OWNER' || conv.myRole === 'MODERATOR');
+    }
+
+    // ---------- selecting messages, clearing and deleting a chat ----------
+
+    /** The selected messages that still exist in the conversation currently open. */
+    function selectionItems() {
+        const conv = state.currentConversation;
+        if (!conv) return [];
+        return (state.messages.get(conv.id) || []).filter((msg) => {
+            return !msg.deleted && state.selection.ids.indexOf(msg.id) >= 0;
+        });
+    }
+
+    /** Mirrors the server's rule: your own messages, or anyone's when you run the group. */
+    function canDeleteMessage(msg) {
+        const conv = state.currentConversation;
+        if (!conv || !state.user) return false;
+        return String(msg.senderId) === String(state.user.id) || isAdminConversation(conv);
+    }
+
+    function enterSelectionMode() {
+        if (!state.currentConversation) return;
+        state.selection.active = true;
+        state.selection.ids = [];
+        renderMessages();
+        renderSelectionBar();
+    }
+
+    function exitSelectionMode() {
+        if (!state.selection.active) return;
+        state.selection.active = false;
+        state.selection.ids = [];
+        renderMessages();
+        renderSelectionBar();
+    }
+
+    function toggleMessageSelection(msg) {
+        const idx = state.selection.ids.indexOf(msg.id);
+        if (idx >= 0) state.selection.ids.splice(idx, 1);
+        else state.selection.ids.push(msg.id);
+        renderMessages();
+        renderSelectionBar();
+    }
+
+    function selectableMessages() {
+        const conv = state.currentConversation;
+        if (!conv) return [];
+        return (state.messages.get(conv.id) || []).filter((msg) => !msg.deleted);
+    }
+
+    /** "Select all" covers the messages already loaded and toggles back off. */
+    function toggleSelectAll() {
+        const items = selectableMessages();
+        const allPicked = items.length > 0
+            && items.every((msg) => state.selection.ids.indexOf(msg.id) >= 0);
+        state.selection.ids = allPicked ? [] : items.map((msg) => msg.id);
+        renderMessages();
+        renderSelectionBar();
+    }
+
+    function renderSelectionBar() {
+        const bar = $('selection-bar');
+        if (!bar) return;
+        const show = state.selection.active && !!state.currentConversation;
+        bar.hidden = !show;
+        if (!show) return;
+        const picked = selectionItems();
+        $('selection-count').textContent = picked.length === 1
+            ? '1 message selected' : picked.length + ' messages selected';
+        const items = selectableMessages();
+        const allPicked = items.length > 0
+            && items.every((msg) => state.selection.ids.indexOf(msg.id) >= 0);
+        $('selection-all-btn').textContent = allPicked ? 'Clear selection' : 'Select all';
+        $('selection-forward-btn').disabled = picked.length === 0;
+        const canDelete = picked.length > 0 && picked.every(canDeleteMessage);
+        const remove = $('selection-delete-btn');
+        remove.disabled = !canDelete;
+        remove.title = picked.length && !canDelete
+            ? 'You can only delete your own messages unless you own or moderate this group' : '';
+    }
+
+    /** Re-reads the first page so deleted bubbles show their tombstone, not a hole. */
+    async function reloadConversationHistory(conversationId) {
+        try {
+            const messages = await request('/conversations/' + conversationId + '/messages?size=50');
+            state.messages.set(conversationId, messages);
+            state.pages[conversationId] = { next: 1, loading: false, exhausted: messages.length < 50 };
+        } catch (err) {
+            toast(err.message);
+        }
+    }
+
+    async function deleteSelectedMessages() {
+        const conv = state.currentConversation;
+        const picked = selectionItems();
+        if (!conv || !picked.length) return;
+        const ok = await confirmAction({
+            title: 'Delete ' + picked.length + (picked.length === 1 ? ' message' : ' messages') + '?',
+            message: 'They disappear for everyone in ' + convTitle(conv)
+                + ' and cannot be restored.',
+            confirm: 'Delete for everyone'
+        });
+        if (!ok) return;
+        try {
+            const result = await request('/conversations/' + conv.id + '/messages/bulk-delete', {
+                method: 'POST',
+                body: JSON.stringify({ messageIds: picked.map((msg) => msg.id) })
+            });
+            exitSelectionMode();
+            await reloadConversationHistory(conv.id);
+            renderMessages();
+            toast(result && result.message ? result.message : 'Messages deleted');
+        } catch (err) {
+            toast(err.message);
+        }
+    }
+
+    function openBulkForwardModal(count) {
+        const { body } = openModal('Forward ' + count + ' messages to');
+        const list = el('div', 'card-list');
+        body.appendChild(list);
+        const others = (state.conversations || []).filter((conv) => {
+            return !state.currentConversation || String(conv.id) !== String(state.currentConversation.id);
+        });
+        if (!others.length) {
+            list.appendChild(el('div', 'empty', 'No other conversation to forward into'));
+            return;
+        }
+        others.forEach((conv) => {
+            const item = el('button', 'card-row');
+            item.type = 'button';
+            item.appendChild(el('strong', '', convTitle(conv)));
+            item.addEventListener('click', () => {
+                closeModal();
+                forwardSelectionTo(conv);
+            });
+            list.appendChild(item);
+        });
+    }
+
+    async function forwardSelectionTo(conv) {
+        const picked = selectionItems();
+        if (!picked.length) return;
+        try {
+            const result = await request('/conversations/' + conv.id + '/messages/bulk-forward', {
+                method: 'POST',
+                body: JSON.stringify({
+                    messageIds: picked.map((msg) => msg.id),
+                    clientMessageId: generateClientMessageId()
+                })
+            });
+            exitSelectionMode();
+            if (state.currentConversation && String(state.currentConversation.id) === String(conv.id)) {
+                await reloadConversationHistory(conv.id);
+                renderMessages();
+            }
+            await loadConversations();
+            toast('Forwarded ' + (result.forwarded || 0) + ' to ' + convTitle(conv));
+        } catch (err) {
+            toast(err.message);
+        }
+    }
+
+    function forgetConversation(conversationId) {
+        if (state.conversations) {
+            state.conversations = state.conversations.filter((item) => String(item.id) !== String(conversationId));
+        }
+        state.messages.delete(conversationId);
+        delete state.pages[conversationId];
+        state.pinned = [];
+        if (state.currentConversation
+            && String(state.currentConversation.id) === String(conversationId)) {
+            state.currentConversation = null;
+            $('app-shell').classList.remove('show-chat');
+            openView('chats');
+        }
+        renderConversations();
+    }
+
+    /** The chat's history is gone from memory, so the next open refetches it. */
+    function dropLocalHistory(conversationId) {
+        state.messages.delete(conversationId);
+        delete state.pages[conversationId];
+        state.pinned = [];
+        exitSelectionMode();
+    }
+
+    async function clearChatForMe() {
+        const conv = state.currentConversation;
+        if (!conv) return;
+        const peer = isGroup(conv) ? 'Other members keep their messages.'
+            : 'The other person keeps their messages.';
+        const ok = await confirmAction({
+            title: 'Clear this chat for me?',
+            message: 'Your copy of the history in ' + convTitle(conv) + ' is hidden and the chat leaves '
+                + 'your list, but nothing is destroyed: ' + peer
+                + ' The chat returns as soon as someone writes in it.',
+            confirm: 'Clear for me'
+        });
+        if (!ok) return;
+        try {
+            await request('/conversations/' + conv.id + '/clear', { method: 'POST', body: '{}' });
+            dropLocalHistory(conv.id);
+            state.currentConversation = null;
+            $('app-shell').classList.remove('show-chat');
+            await loadConversations();
+            openView('chats');
+            toast('Chat cleared for you');
+        } catch (err) {
+            toast(err.message);
+        }
+    }
+
+    /** The chat this browser just asked to destroy, so its own echo is not read as news. */
+    let selfDeletedConversationId = null;
+
+    async function deleteChatForEveryone() {
+        const chat = state.currentConversation;
+        if (!chat) return;
+        const scope = isGroup(chat)
+            ? 'The group "' + convTitle(chat) + '"'
+                + (chat.memberCount ? ' and its ' + chat.memberCount + ' members' : '')
+                + ' will be gone for everyone.'
+            : 'This chat with ' + convTitle(chat) + ' will be gone for both of you.';
+        const ok = await confirmAction({
+            title: 'Delete this chat for everyone?',
+            message: 'Every message ever sent here is destroyed and cannot be restored. ' + scope,
+            confirm: 'Delete for everyone'
+        });
+        if (!ok) return;
+        selfDeletedConversationId = chat.id;
+        try {
+            await request('/conversations/' + chat.id, { method: 'DELETE' });
+            forgetConversation(chat.id);
+            toast('Conversation deleted for everyone');
+        } catch (err) {
+            toast(err.message);
+        } finally {
+            setTimeout(() => { selfDeletedConversationId = null; }, 4000);
+        }
+    }
+
+    async function openChatActionsModal() {
+        const conv = state.currentConversation;
+        if (!conv) return;
+        if (isGroup(conv) && !conv.myRole) await ensureMyRole(conv);
+        const { body } = openModal(convTitle(conv));
+        const list = el('div', 'card-list');
+        body.appendChild(list);
+
+        const addAction = (label, hint, handler) => {
+            const item = el('button', 'card-row');
+            item.type = 'button';
+            item.appendChild(el('strong', '', label));
+            item.appendChild(el('span', 'muted', hint));
+            if (handler) item.addEventListener('click', () => {
+                closeModal();
+                handler();
+            });
+            else {
+                item.disabled = true;
+                item.title = hint;
+            }
+            list.appendChild(item);
+        };
+
+        addAction('Select messages', 'Tick one, several or all messages to forward or delete them',
+            enterSelectionMode);
+        addAction('Clear this chat for me',
+            'Hide the history in this list for you alone; a new message brings the chat back',
+            clearChatForMe);
+        if (isGroup(conv) && conv.myRole !== 'OWNER') {
+            addAction('Delete this chat for everyone',
+                'Only the group owner can delete a group', null);
+        } else {
+            addAction('Delete this chat for everyone',
+                'Destroys the conversation and every message in it, for all members',
+                deleteChatForEveryone);
+        }
+    }
+
+    async function ensureMyRole(conv) {
+        if (!isGroup(conv) || conv.myRole) return;
+        try {
+            const members = await request('/conversations/' + conv.id + '/members');
+            const me = members.find((member) => state.user && member.userId === state.user.id);
+            conv.myRole = me ? me.role : null;
+            conv.memberCount = members.length;
+            renderChatHeader(null);
+        } catch (err) {
+            conv.myRole = null;
+        }
     }
 
     function renderPinnedBar() {
@@ -891,6 +1201,7 @@
         const conv = (state.conversations || []).find((item) => item.id === id);
         if (!conv) return;
         state.currentConversation = conv;
+        exitSelectionMode();
         $('dashboard-view').hidden = true;
         $('friends-view').hidden = true;
         $('requests-view').hidden = true;
@@ -912,17 +1223,7 @@
         closeChatSearch();
         state.pendingAttachment = null;
         renderPendingAttachment();
-        if (isGroup(conv) && !conv.myRole) {
-            try {
-                const members = await request('/conversations/' + id + '/members');
-                const me = members.find((member) => state.user && member.userId === state.user.id);
-                conv.myRole = me ? me.role : null;
-                conv.memberCount = members.length;
-                renderChatHeader(null);
-            } catch (err) {
-                conv.myRole = null;
-            }
-        }
+        if (isGroup(conv)) await ensureMyRole(conv);
         if (!state.messages.has(id)) {
             state.messagesLoading = true;
             renderMessages();
@@ -1207,7 +1508,11 @@
 
     function trapModalKeys(event) {
         const modal = $('modal');
-        if (modal.hidden) return;
+        if (modal.hidden) {
+            // With no card open, Escape is the selection mode's way back.
+            if (event.key === 'Escape' && state.selection.active) exitSelectionMode();
+            return;
+        }
         if (event.key === 'Escape') {
             event.preventDefault();
             closeModal();
@@ -2099,6 +2404,16 @@
                 upsertMessage(frame.data);
             } else if (frame.event === 'MESSAGE_DELETED') {
                 removeMessage(frame.data && frame.data.conversationId, frame.data && frame.data.messageId);
+            } else if (frame.event === 'CONVERSATION_DELETED') {
+                const gone = frame.conversationId || (frame.data && frame.data.conversationId);
+                const stillMine = (state.conversations || []).some((item) => String(item.id) === String(gone));
+                if (gone && stillMine) {
+                    const askedForIt = String(selfDeletedConversationId) === String(gone);
+                    forgetConversation(gone);
+                    if (!askedForIt) {
+                        toast('This conversation was deleted by another member');
+                    }
+                }
             } else if (frame.event === 'TYPING') {
                 recordTyping(frame.conversationId, frame.data && frame.data.username, frame.data && frame.data.typing);
             } else if (frame.event === 'MESSAGE_PINNED') {
@@ -2365,6 +2680,7 @@
         $('card-settings').addEventListener('click', () => openView('settings'));
         $('profile-chip').addEventListener('click', () => openView('settings'));
         $('chat-back-btn').addEventListener('click', () => {
+            exitSelectionMode();
             state.currentConversation = null;
             $('app-shell').classList.remove('show-chat');
             openView(state.filter === 'groups' ? 'groups' : 'chats');
@@ -2391,6 +2707,14 @@
         $('notifications-btn').addEventListener('click', openNotificationsModal);
         $('chat-call-btn').addEventListener('click', () => toast('Voice calls are coming soon'));
         $('chat-search-btn').addEventListener('click', toggleChatSearch);
+        $('chat-more-btn').addEventListener('click', openChatActionsModal);
+        $('selection-all-btn').addEventListener('click', toggleSelectAll);
+        $('selection-forward-btn').addEventListener('click', () => {
+            const picked = selectionItems();
+            if (picked.length) openBulkForwardModal(picked.length);
+        });
+        $('selection-delete-btn').addEventListener('click', deleteSelectedMessages);
+        $('selection-cancel-btn').addEventListener('click', exitSelectionMode);
         $('chat-search-close').addEventListener('click', closeChatSearch);
         $('chat-search-input').addEventListener('input', onSearchInput);
         $('chat-search-input').addEventListener('keydown', (event) => {

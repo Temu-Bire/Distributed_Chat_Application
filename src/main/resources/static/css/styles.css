@@ -577,3 +577,24 @@ ul { list-style: none; }
 .reply-bar__info { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 12px; }
 .reply-bar__info span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .request-message { font-style: italic; opacity: .8; overflow-wrap: anywhere; }
+
+/* Message selection mode: bubbles become tap targets and one bar holds the
+   batch actions, so the per-message hover row never competes with them. */
+.msg-row--selectable { cursor: pointer; }
+.msg-row--selectable .msg-actions { display: none !important; }
+.msg-row--selectable .bubble { position: relative; }
+.msg-row--selected .bubble { outline: 2px solid var(--primary); outline-offset: 1px; }
+.msg-row--selected .bubble::after {
+    content: '\2713';
+    position: absolute; top: -7px; right: -7px;
+    width: 20px; height: 20px; border-radius: 50%;
+    display: grid; place-items: center;
+    background: var(--primary); color: #fff; font-size: 12px;
+}
+.msg-row--undeletable.msg-row--selected .bubble { outline-color: var(--danger); }
+.selection-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 16px; padding: 8px 14px; border: 1px solid var(--line); border-bottom: 0; border-radius: 12px 12px 0 0; background: var(--surface); }
+.selection-bar__count { font-size: 12px; font-weight: 600; }
+.selection-bar__actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pill--danger { border-color: var(--danger); color: var(--danger); }
+.pill--danger:hover { background: rgba(220, 38, 38, .1); }
+.pill[disabled], .pill.is-disabled { opacity: .45; cursor: not-allowed; }
